@@ -6,13 +6,13 @@ app:
 # AI配置
 ai:
   provider: "modelscope"
-  api_key: "ms-79a253fb-2f14-4fcd-9343-9a73ca29fca4"
+  api_key: ""
   model: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
 
 # 嵌入配置
 embedding:
   provider: "modelscope"
-  api_key: "sk-hasnhsgeifmagsadxfmjnamkjlrftvqwxdmhonhxueoeiowd"
+  api_key: ""
   model: "BAAI/bge-large-zh-v1.5"
 
 # 内存配置
