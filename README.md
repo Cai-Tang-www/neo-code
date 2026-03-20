@@ -1,79 +1,53 @@
 # neo-code
 
-一个基于 Go 的命令行对话 Demo，当前使用 `config.yaml` 作为唯一业务配置文件。
+A minimal coding agent written in Go.
 
-现在支持：
+## What this build proves
 
-1. REPL 对话与流式输出
-2. `/switch` 切换聊天模型
-3. 本地 JSON 长期记忆检索与写回
-4. 短期上下文保留
-5. 人设文件注入
+This repository now demonstrates the smallest useful agent loop for a local coding assistant:
 
-## 配置方式
+1. read code from the workspace
+2. edit code in the workspace
+3. run commands in the workspace
+4. return the result to the user
 
-只需要修改根目录下的 `config.yaml`。
+## Architecture
 
-示例：
+The implementation uses a small agent-oriented layout inspired by a larger Go service skeleton:
 
-```yaml
-app:
-  name: "NeoCode"
-  version: "1.0.0"
+- `cmd/neo-code`: CLI entrypoint
+- `internal/agent`: runtime, session state, and result formatting
+- `internal/tools`: file and command tools
+- `internal/workspace`: workspace-safe file operations
 
-ai:
-  provider: "modelscope"
-  api_key: "你的聊天模型 Key"
-  model: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
-
-embedding:
-  provider: "modelscope"
-  api_key: "你的向量模型 Key"
-  model: "BAAI/bge-large-zh-v1.5"
-
-memory:
-  file_path: "./data/memory.json"
-  top_k: 5
-  min_score: 0.75
-  max_items: 1000
-
-history:
-  short_term_turns: 6
-
-persona:
-  file_path: "./persona.txt"
-```
-
-说明：
-
-- `ai.api_key`：聊天模型调用所需 Key
-- `embedding.api_key`：记忆检索和记忆保存所需向量 Key
-- `memory.file_path`：长期记忆存储文件
-- `history.short_term_turns`：保留最近多少轮上下文
-- `persona.file_path`：启动时加载的人设文件
-
-## 运行
+## Run
 
 ```bash
 go run .
 ```
 
-## 可用命令
+## Commands
 
-- `/models`：查看支持的模型
-- `/switch <model>`：切换当前聊天模型
-- `/memory`：查看本地记忆状态
-- `/clear-memory`：清空长期记忆
-- `/clear-context`：清空当前短期上下文
-- `/help`：查看帮助
-- `/exit`：退出程序
+- `/read <path>`: read a file from the workspace
+- `/write <path> <content>`: overwrite a file with inline content
+- `/replace <path> <old> <new>`: replace the first matching text in a file
+- `/run <command>`: run a shell command inside the workspace
+- `/result`: print the latest tool result
+- `/status`: print the workspace root
+- `/help`: print help
+- `/exit`: exit the CLI
 
-## 相关文件
+## Examples
 
-- `config.yaml`：主配置文件
-- `config/models.yaml`：模型与接口地址映射
-- `data/memory.json`：长期记忆存储文件
-- `persona.txt`：人设内容
+```text
+/read README.md
+/replace README.md "minimal CLI agent" "minimal coding agent"
+/run go test ./...
+/result
+```
 
-如果没有配置 `embedding.api_key`，普通对话可能还能发起，但记忆检索和记忆保存会不可用。
+## Notes
 
+- File operations are restricted to the current workspace root.
+- `/write` expects inline content. For content with spaces, wrap it in quotes.
+- `/replace` performs a single exact-text replacement.
