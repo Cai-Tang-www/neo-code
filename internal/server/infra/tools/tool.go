@@ -2,6 +2,10 @@ package tools
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
 )
 
 // Tool 定义了所有工具必须实现的接口。
@@ -10,22 +14,33 @@ type Tool interface {
 	Name() string
 	// Description 返回工具的人类可读描述。
 	Description() string
-	// Run 执行工具并返回ToolResult。
-	// 参数以map[string]interface{}形式传递，以匹配预期的AI调用格式。
+	// Schema 返回工具调用参数的结构化定义。
+	Schema() ToolSchema
+	// Run 执行工具并返回 ToolResult。
 	Run(params map[string]interface{}) *ToolResult
+}
+
+// ToolSchema 描述工具参数结构。
+type ToolSchema struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  []ToolParameter `json:"parameters"`
+}
+
+// ToolParameter 描述单个工具参数。
+type ToolParameter struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Required    bool   `json:"required,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // ToolResult 表示执行工具的结果。
 type ToolResult struct {
-	// ToolName 是生成此结果的工具的名称。
-	ToolName string `json:"tool"`
-	// Success 指示工具是否成功执行。
-	Success bool `json:"success"`
-	// Output 包含工具的成功输出（如果有）。
-	Output string `json:"output,omitempty"`
-	// Error 包含工具失败时的错误信息。
-	Error string `json:"error,omitempty"`
-	// Metadata 包含关于执行的附加信息。
+	ToolName string                 `json:"tool"`
+	Success  bool                   `json:"success"`
+	Output   string                 `json:"output,omitempty"`
+	Error    string                 `json:"error,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -34,31 +49,98 @@ type ToolRegistry struct {
 	tools map[string]Tool
 }
 
-// GlobalRegistry 是ToolRegistry的单例实例。
-var GlobalRegistry = &ToolRegistry{
-	tools: make(map[string]Tool),
-}
+var (
+	initToolsOnce sync.Once
 
-// Register 向注册表添加一个工具。
+	// GlobalRegistry 是 ToolRegistry 的单例实例。
+	GlobalRegistry = &ToolRegistry{tools: make(map[string]Tool)}
+)
+
 func (r *ToolRegistry) Register(tool Tool) {
 	r.tools[tool.Name()] = tool
 }
 
-// Get 根据名称从注册表中检索一个工具。
 func (r *ToolRegistry) Get(name string) Tool {
 	return r.tools[name]
 }
 
-// ListTools 返回所有已注册工具名称的切片。
 func (r *ToolRegistry) ListTools() []string {
 	keys := make([]string, 0, len(r.tools))
 	for k := range r.tools {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }
 
-// MarshalJSON 自定义ToolResult的JSON编码以省略空字段。
+func (r *ToolRegistry) Schemas() []ToolSchema {
+	names := r.ListTools()
+	schemas := make([]ToolSchema, 0, len(names))
+	for _, name := range names {
+		tool := r.tools[name]
+		if tool == nil {
+			continue
+		}
+		schemas = append(schemas, tool.Schema())
+	}
+	return schemas
+}
+
+func ValidateParams(schema ToolSchema, params map[string]interface{}) error {
+	allowed := make(map[string]ToolParameter, len(schema.Parameters))
+	for _, param := range schema.Parameters {
+		allowed[param.Name] = param
+		if param.Required {
+			value, ok := params[param.Name]
+			if !ok || value == nil {
+				return fmt.Errorf("缺少必需参数: %s", param.Name)
+			}
+		}
+	}
+
+	for key, value := range params {
+		param, ok := allowed[key]
+		if !ok {
+			return fmt.Errorf("未知参数: %s", key)
+		}
+		if value == nil {
+			continue
+		}
+		if err := validateParamType(param.Type, value); err != nil {
+			return fmt.Errorf("参数 %s 校验失败: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func validateParamType(expected string, value interface{}) error {
+	switch expected {
+	case "string":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("期望 string")
+		}
+	case "number":
+		switch value.(type) {
+		case int, int32, int64, float32, float64, string:
+			return nil
+		default:
+			return fmt.Errorf("期望 number")
+		}
+	case "boolean":
+		switch value.(type) {
+		case bool, string:
+			return nil
+		default:
+			return fmt.Errorf("期望 boolean")
+		}
+	case "object":
+		if _, ok := value.(map[string]interface{}); !ok {
+			return fmt.Errorf("期望 object")
+		}
+	}
+	return nil
+}
+
 func (tr *ToolResult) MarshalJSON() ([]byte, error) {
 	type Alias ToolResult
 	return json.Marshal(&struct {
@@ -72,17 +154,44 @@ func (tr *ToolResult) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// JsonMarshalIndent 用于缩进JSON编码
 func JsonMarshalIndent(v interface{}, prefix, indent string) ([]byte, error) {
 	return json.MarshalIndent(v, prefix, indent)
 }
 
-// Initialize 注册所有标准工具。
+func FormatSchemasForPrompt(schemas []ToolSchema) string {
+	var b strings.Builder
+	for _, schema := range schemas {
+		b.WriteString("- ")
+		b.WriteString(schema.Name)
+		b.WriteString(": ")
+		b.WriteString(schema.Description)
+		b.WriteString("\n")
+		for _, param := range schema.Parameters {
+			required := "optional"
+			if param.Required {
+				required = "required"
+			}
+			b.WriteString("  - ")
+			b.WriteString(param.Name)
+			b.WriteString(" (")
+			b.WriteString(param.Type)
+			b.WriteString(", ")
+			b.WriteString(required)
+			b.WriteString("): ")
+			b.WriteString(param.Description)
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func Initialize() {
-	GlobalRegistry.Register(&ReadTool{})
-	GlobalRegistry.Register(&WriteTool{})
-	GlobalRegistry.Register(&EditTool{})
-	GlobalRegistry.Register(&BashTool{})
-	GlobalRegistry.Register(&ListTool{})
-	GlobalRegistry.Register(&GrepTool{})
+	initToolsOnce.Do(func() {
+		GlobalRegistry.Register(&ReadTool{})
+		GlobalRegistry.Register(&WriteTool{})
+		GlobalRegistry.Register(&EditTool{})
+		GlobalRegistry.Register(&BashTool{})
+		GlobalRegistry.Register(&ListTool{})
+		GlobalRegistry.Register(&GrepTool{})
+	})
 }
