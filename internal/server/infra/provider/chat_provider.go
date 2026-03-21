@@ -1,0 +1,66 @@
+package provider
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"go-llm-demo/config"
+	"go-llm-demo/internal/server/domain"
+)
+
+var (
+	ErrInvalidAPIKey        = errors.New("invalid api key")
+	ErrAPIKeyValidationSoft = errors.New("api key validation uncertain")
+)
+
+func NewChatProvider(model string) (domain.ChatProvider, error) {
+	if config.GlobalAppConfig == nil {
+		return nil, fmt.Errorf("config.yaml is not loaded")
+	}
+
+	providerName := strings.TrimSpace(config.GlobalAppConfig.AI.Provider)
+	if providerName == "" {
+		providerName = "modelscope"
+	}
+	if model == "" {
+		model = strings.TrimSpace(config.GlobalAppConfig.AI.Model)
+	}
+
+	switch strings.ToLower(providerName) {
+	case "modelscope":
+		apiKey := config.RuntimeAPIKey()
+		if apiKey == "" {
+			return nil, fmt.Errorf("missing %s environment variable", config.APIKeyEnvVar)
+		}
+		modelName := model
+		if modelName == "" {
+			modelName = DefaultModel()
+		}
+		return &ModelScopeProvider{
+			APIKey: apiKey,
+			Model:  modelName,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported ai.provider: %s", providerName)
+	}
+}
+
+func ValidateChatAPIKey(ctx context.Context, cfg *config.AppConfiguration) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+
+	providerName := strings.TrimSpace(cfg.AI.Provider)
+	if providerName == "" {
+		providerName = "modelscope"
+	}
+
+	switch strings.ToLower(providerName) {
+	case "modelscope":
+		return validateModelScopeAPIKey(ctx, cfg)
+	default:
+		return fmt.Errorf("unsupported ai.provider: %s", providerName)
+	}
+}

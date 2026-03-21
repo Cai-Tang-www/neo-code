@@ -1,199 +1,212 @@
-# NeoCode Agent Guidelines
+# Agent Guidelines for go-llm-demo
 
-This file provides instructions for agentic coding agents working on the NeoCode repository.
-
-## Build, Lint, and Test Commands
+## 1. Build, Lint, and Test Commands
 
 ### Building
-```bash
-# Build the application
-go build -o neo-code .
-
-# Run the application
-go run .
-
-# Install dependencies
-go mod tidy
-```
+- `go build ./...` - builds all packages
+- `go build ./cmd/...` - builds only the executables (tui and server)
 
 ### Testing
-Currently, there are no test files in the repository. When adding tests:
-```bash
-# Run all tests
-go test ./...
+- `go test ./...` - runs all tests in the repository
+- To run a single test function: `go test -run TestFunctionName ./package/path`
+  Example: `go test -run TestSecurityManager_Check ./internal/pkg/security`
+- To run tests with verbose output: `go test -v ./...`
+- To run a single test verbosely: `go test -v -run TestFunctionName ./package/path`
+- To run tests with coverage: `go test -cover ./...`
+- To run a specific test package: `go test ./internal/pkg/security`
 
-# Run tests for a specific package
-go test ./ai
-go test ./services
-go test ./memory
-go test ./config
+### Linting and Formatting
+- Format code: `go fmt ./...` or `gofmt -w <file>`
+- Format and organize imports: `goimports -w <file>` or `goimports -w .`
+- Verify formatting: `gofmt -d .` (should return no output)
+- Note: No external linter is configured by default; formatting relies on gofmt/goimports
 
-# Run a single test function
-go test -run TestFunctionName ./package
+### Dependency Management
+- Tidy modules: `go mod tidy`
+- Verify dependencies: `go mod verify`
+- Check for updates: `go list -u -m all` (see which have updates)
+- Update dependencies: `go get -u ./...` then `go mod tidy`
 
-# Run tests with coverage
-go test -cover ./...
+## 2. Code Style Guidelines
 
-# Run tests with verbose output
-go test -v ./...
-```
-
-### Linting
-```bash
-# Install golangci-lint (if not available)
-# go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.50.0
-
-# Run linting
-golangci-lint run
-
-# Fix linting issues automatically (when supported)
-golangci-lint run --fix
-```
-
-### Formatting
-```bash
-# Format Go code
-go fmt ./...
-
-# Format specific file
-go fmt filename.go
-
-# Check if code is properly formatted
-gofmt -l .
-```
-
-## Code Style Guidelines
+### General
+- Follow [Effective Go](https://golang.org/doc/effective_go.html) and [Go Code Review Comments](https://github.com/golang/go/wiki/CodeReviewComments)
+- Prioritize clarity over cleverness
+- Handle errors explicitly; don't ignore them without reason
 
 ### Imports
-- Group imports: standard library first, then third-party, then local packages
-- Each group separated by a blank line
-- Local imports use the repository path: `neo-code/package`
-- Sort imports alphabetically within each group
-- Use gofmt/goimports for automatic formatting
+- Group imports in this order:
+  1. Standard library packages
+  2. Third-party packages (github.com, golang.org, etc.)
+  3. Local project packages (go-llm-demo/...)
+- Separate groups with a blank line
+- Within each group, sort alphabetically
+- Example:
+  ```
+  import (
+      "bufio"
+      "context"
+      "fmt"
 
-Example:
-```go
-import (
-    "context"
-    "fmt"
-    "strings"
+      "github.com/charmbracelet/bubbletea"
 
-    "neo-code/ai"
-    "neo-code/config"
-)
-```
+      "go-llm-demo/internal/server"
+  )
+  ```
+- Avoid relative imports (`.` or `..`); always use the full module path
 
 ### Formatting
-- Use `gofmt` as the standard formatter
-- Line length: No strict limit, but aim for readability (typically 80-100 characters)
-- Indentation: Use tabs (Go standard)
-- Blank lines: Use to separate logical sections within functions
-- Control structures: Opening brace on same line, closing brace on its own line
-- Switch statements: No fallthrough by default; use `fallthrough` keyword explicitly when needed
+- Run `gofmt` and `goimports` before committing
+- Line length: aim for 80-120 characters; avoid extremely long lines
+- Use tabs for indentation (Go standard), not spaces
+- Opening braces go on the same line as the statement (if, for, func, etc.)
+- Use blank lines to separate logical sections within functions
+- Don't add trailing whitespace
 
-### Types
-- Define structs with clear, descriptive names
-- Use embedded types when appropriate for composition
-- Define interfaces that satisfy the smallest possible set of methods
-- Export only what needs to be public (capitalized names)
-- Use composition over inheritance
-- Define zero values that are meaningful or document when they're not
-
-### Naming Conventions
-- Packages: lowercase, single word, no underscores
-- Variables: camelCase, descriptive but concise
-- Constants: camelCase or MixedCase for const, ALL_CAPS for iota-enums
-- Functions: camelCase
-- Structs: MixedCase (PascalCase)
-- Interfaces: MixedCase, often ending with -er (Reader, Writer, etc.)
-- Methods: camelCase, receiver name should be short (1-2 letters)
-- Files: snake_case.go
-- Error variables: err prefix or Err suffix (errNotFound, ErrInvalidInput)
+### Types and Naming
+- Package names: lowercase, single word, no underscores
+- Exported names (functions, types, vars, constants): PascalCase
+- Unexported names: camelCase
+- Interface names:
+  - Single method: method name + "er" (e.g., Reader, Writer)
+  - Multiple methods: noun or noun phrase (e.g., ReadWriter, Server)
+- Struct fields: exported (PascalCase), unexported (camelCase)
+- Variables: camelCase; prefixed with `n` for length, `num` for count, `buf` for buffer
+- Constants: exported (PascalCase), unexported (camelCase); use iota for enumerations
+- Error types: end with `Error` (e.g., `ValidationError`)
+- Factory functions: `New` prefix (e.g., `NewClient`)
+- Getters: no `Get` prefix for struct fields (use field name directly if exported)
 
 ### Error Handling
-- Handle errors explicitly; don't ignore them
-- Return errors early when they prevent normal function execution
-- Wrap errors with context using `fmt.Errorf()` or `errors.Wrap()` when adding value
-- Sentinel errors: predeclare errors for specific error conditions
-- Error strings: lowercase, no punctuation unless including proper nouns
-- Panic only for truly unrecoverable situations (e.g., initialization failures)
-- Recover only at package boundaries, not for flow control
+- Check errors immediately after function calls
+- Handle or return errors; don't ignore with `_` without justification
+- Wrap errors with context when returning: `return fmt.Errorf("operation: %w", err)`
+- Use `errors.Is()` and `errors.As()` for error inspection
+- Sentinel errors: declare as `var ErrSomething = errors.New("message")`
+- Don't panic in library code; panic only in main or unrecoverable situations
+- Log errors appropriately (though this project doesn't have extensive logging yet)
 
 ### Comments
-- File comment: Each file should start with a comment describing its purpose
-- Function comments: Describe what the function does, parameters, return values, and any side effects
-- Complex code blocks: Add explanatory comments
-- TODO comments: Use `// TODO:` format for tracking work that needs to be done
-- Avoid obvious comments; focus on why, not what
+- Comment every exported function, type, constant, and variable
+- Comment should be a complete sentence starting with the name being described
+  Example: `// ParseInput parses the input string and returns a Config struct.`
+- Avoid commenting bad code; rewrite it instead
+- Comments should explain why, not what (unless the what is non-obvious)
+- Use // for line comments; /* */ only for large blocks or generated code
+- Keep comments updated when code changes
 
-### Specific Patterns in This Codebase
-- Configuration: Uses struct tags for YAML decoding (`yaml:"key"`)
-- Context: Always pass context.Context as first parameter when appropriate
-- Interfaces: Define clear interfaces for providers (ChatProvider, EmbeddingProvider)
-- Error checking: Check errors immediately after function calls
-- Memory management: Use sync.Once for singleton initialization
-- Channel usage: Close channels when done sending to prevent goroutine leaks
-- String building: Use strings.Builder for efficient string concatenation
-- Time handling: Use time.Now().UTC() for consistent timestamps
+### Control Structures
+- Prefer guard clauses to reduce nesting
+  ```
+  if err != nil {
+      return err
+  }
+  ```
+- Handle error cases first, then the happy path
+- Use `for` loops with range slices/maps; avoid manual indexing when possible
+- Switch statements: no fallthrough unless explicitly labeled `// fallthrough`
+- Defer for resource cleanup (close files, release locks, etc.)
 
-### Memory Package Specifics
-- Store interface: Abstract storage mechanism
-- Item struct: Contains all necessary fields for memory items
-- Search: Uses cosine similarity for matching memories
-- Serialization: JSON-based persistence
+### Specific Conventions in This Project
+- Configuration: use YAML files; load via `config.LoadAppConfig()`
+- TUI components: follow bubbletea patterns in `/internal/tui/`
+- Services: keep business logic in `/internal/server/service/`
+- Providers: external API wrappers in `/internal/server/infra/provider/`
+- Tools: implement specific capabilities in `/internal/server/infra/tools/`
+- Domain models: keep pure in `/internal/server/domain/`
+- Error types: define in relevant packages; prefix with package name if generic (e.g., `tool.ErrInvalidInput`)
 
-### Services Package Specifics
-- Memory augmentation: Enhances chat context with relevant memories
-- Provider abstraction: Supports multiple AI providers through interfaces
-- Streaming: Uses channels for streaming responses from AI models
+## 3. Version Control Practices
 
-### AI Package Specifics
-- Provider interfaces: Define contracts for different AI capabilities
-- Message struct: Standard format for chat messages
-- Factory functions: New*ProviderFromEnv for creating providers from configuration
+### Commits
+- Make small, focused commits
+- Use conventional commit messages:
+  - `feat:` for new features
+  - `fix:` for bug fixes
+  - `docs:` for documentation changes
+  - `refactor:` for code restructuring
+  - `test:` for adding/modifying tests
+  - `chore:` for maintenance tasks
+  - Format: `<type>: <description>` (e.g., `feat: add chat command to TUI`)
+- Include motivation in commit message body if non-obvious
+- Reference issues: `Fixes #123` or `Related to #456`
 
-### Config Package Specifics
-- Global state: Uses package-level variables for configuration
-- YAML loading: Supports reloading configuration
-- Defaults: Provides sensible defaults when configuration is missing
+### Branches
+- Main branch (`master` or `main`) is stable
+- Feature branches: `feature/short-description`
+- Bug fix branches: `fix/issue-number-description`
+- Keep branches short-lived; merge via pull request
 
-## Directory Structure
-```
-neo-code/
-├── main.go              # Application entry point
-├── config.yaml          # Main configuration file
-├── config/              # Configuration loading and structures
-├── ai/                  # AI provider interfaces and implementations
-├── services/            # Business logic (chat service, memory handling)
-├── memory/              # Memory storage and retrieval
-├── data/                # Data files (memory.json, etc.)
-├── persona.txt          # Persona/prompt file
-└── go.mod               # Go module definition
-```
+### Pull Requests
+- Keep PRs focused on a single change
+- Include summary of what and why
+- List any breaking changes
+- Mention test commands run
+- Request review from relevant team members
+- Ensure CI passes before merging (if applicable)
 
-## Common Workflows
-1. Adding a new AI provider:
-   - Define provider interfaces in ai/ if needed
-   - Implement the provider in a new file
-   - Update factory functions to instantiate the new provider
-   - Add configuration options if needed
+## 4. Security Guidelines
 
-2. Modifying memory handling:
-   - Update memory/storage interfaces if changing storage mechanism
-   - Modify Item struct if changing what's stored
-   - Update search algorithms if changing matching strategy
-   - Adjust configuration options as needed
+- Never commit secrets (API keys, passwords, tokens) to the repository
+- Use environment variables or external secret management for sensitive data
+- The `config.example.yaml` file shows the structure; never commit actual `config.yaml` with secrets
+- Validate all inputs (especially from AI or external sources)
+- Use the security checker (in `/internal/pkg/security/`) for tool authorization
+- Keep dependencies updated to avoid known vulnerabilities
+- Review code for potential injection points (command, path traversal, etc.)
+- When in doubt about security implications, ask for review
 
-3. Changing chat behavior:
-   - Modify services/request.go for core chat logic
-   - Update context augmentation strategies
-   - Adjust memory saving/retrieval parameters
-   - Update command handling in services/REPL.go if needed
+## 5. Running the Application
 
-## When in Doubt
-- Follow existing patterns in the codebase
-- Use gofmt/goimports for formatting
-- Write clear, concise comments explaining why
-- Handle errors explicitly
-- Keep functions focused on a single responsibility
-- Write tests for new functionality
+### TUI (Terminal User Interface)
+- Run: `go run ./cmd/tui`
+- Requires config.yaml with AI API key
+- Interactive terminal application using bubbletea
+
+### Server
+- Run: `go run ./cmd/server`
+- Provides HTTP API for external clients
+- Configure via config.yaml or environment variables
+
+### Development
+- To run tests while developing: `go test ./... -v`
+- To format on save: configure your editor to run gofmt/goimports
+- To check for race conditions: `go test -race ./...` (where applicable)
+
+## 6. Modules and Packages
+
+### Module Structure
+- `go-llm-demo` (root)
+  - `cmd/` - main applications (tui, server)
+  - `internal/` - private application code
+    - `pkg/` - reusable libraries (security, etc.)
+    - `server/` - server-specific code
+      - `domain/` - business logic entities
+      - `infra/` - infrastructure (providers, tools, repositories)
+      - `service/` - application services
+      - `transport/` - network handlers (HTTP, etc.)
+    - `tui/` - terminal user interface
+      - `core/` - model, view, update logic
+      - `infra/` - TUI infrastructure (API client)
+  - `api/` - external API definitions (protobuf)
+  - `config/` - configuration loading
+  - `configs/` - example configurations
+  - `data/` - data files (if any)
+  - `docs/` - documentation
+  - `scripts/` - helper scripts
+  - `security/` - security policies (yaml files)
+  - `test/` - integration/test helpers
+
+### Dependency Rules
+- No circular dependencies between packages
+- Dependencies flow inward: cmd → internal → pkg
+- internal packages should not depend on each other across domains
+- Prefer composition over inheritance
+- Interfaces define contracts; implementations live where used
+
+## 7. Additional Notes
+
+- This project uses Go 1.26.1+; ensure your toolchain is compatible
+- The TUI requires a terminal that supports ANSI colors
+- For contributions: fork, create branch, make changes, test, submit PR
+- Thank you for contributing to go-llm-demo!
