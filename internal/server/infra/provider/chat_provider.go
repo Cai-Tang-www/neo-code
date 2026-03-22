@@ -33,7 +33,7 @@ func NewChatProvider(model string) (domain.ChatProvider, error) {
 	case "modelscope":
 		apiKey := configs.RuntimeAPIKey()
 		if apiKey == "" {
-			return nil, fmt.Errorf("missing %s environment variable", configs.APIKeyEnvVar)
+			return nil, fmt.Errorf("missing %s environment variable", configs.RuntimeAPIKeyEnvVarName())
 		}
 		modelName := model
 		if modelName == "" {

@@ -16,10 +16,10 @@ type Rule struct {
 	Target  string `yaml:"target,omitempty"`
 	Command string `yaml:"command,omitempty"`
 	Domain  string `yaml:"domain,omitempty"`
-	R       string `yaml:"r,omitempty"`
-	W       string `yaml:"w,omitempty"`
-	X       string `yaml:"x,omitempty"`
-	N       string `yaml:"n,omitempty"`
+	Read    string `yaml:"read,omitempty"`
+	Write   string `yaml:"write,omitempty"`
+	Exec    string `yaml:"exec,omitempty"`
+	Network string `yaml:"network,omitempty"`
 }
 
 type Config struct {

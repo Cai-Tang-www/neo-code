@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const APIKeyEnvVar = "AI_API_KEY"
+const DefaultAPIKeyEnvVar = "AI_API_KEY"
 
 type ModelDetail struct {
 	Name string `yaml:"name"`
@@ -63,7 +63,7 @@ func DefaultAppConfig() *AppConfiguration {
 	cfg.App.Name = "NeoCode"
 	cfg.App.Version = "1.0.0"
 	cfg.AI.Provider = "modelscope"
-	cfg.AI.APIKey = ""
+	cfg.AI.APIKey = DefaultAPIKeyEnvVar
 	cfg.AI.Model = "Qwen/Qwen3-Coder-480B-A35B-Instruct"
 	cfg.Memory.TopK = 5
 	cfg.Memory.MinMatchScore = 2.2
@@ -107,7 +107,6 @@ func LoadBootstrapConfig(filePath string) (*AppConfiguration, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse app config YAML: %w", err)
 	}
-	cfg.AI.APIKey = ""
 	if err := cfg.ValidateBase(); err != nil {
 		return nil, err
 	}
@@ -130,13 +129,13 @@ func EnsureConfigFile(filePath string) (*AppConfiguration, bool, error) {
 	return cfg, true, nil
 }
 
-// WriteAppConfig 将清空 API Key 后的配置写入磁盘。
+// WriteAppConfig 将应用配置写入磁盘。
 func WriteAppConfig(filePath string, cfg *AppConfiguration) error {
 	if cfg == nil {
 		return fmt.Errorf("app config is nil")
 	}
 	cfgCopy := *cfg
-	cfgCopy.AI.APIKey = ""
+	cfgCopy.AI.APIKey = strings.TrimSpace(cfgCopy.AI.APIKey)
 	data, err := yaml.Marshal(&cfgCopy)
 	if err != nil {
 		return fmt.Errorf("failed to marshal app config YAML: %w", err)
@@ -203,15 +202,43 @@ func (c *AppConfiguration) ValidateRuntime() error {
 	if err := c.ValidateBase(); err != nil {
 		return err
 	}
-	if RuntimeAPIKey() == "" {
-		return fmt.Errorf("invalid runtime: %s environment variable is required", APIKeyEnvVar)
+	envVarName := c.APIKeyEnvVarName()
+	if c.RuntimeAPIKey() == "" {
+		return fmt.Errorf("invalid runtime: %s environment variable is required", envVarName)
 	}
 	return nil
 }
 
-// RuntimeAPIKey 返回环境变量中的 API Key，并去掉首尾空白。
+// APIKeyEnvVarName 返回当前配置使用的 API Key 环境变量名。
+func (c *AppConfiguration) APIKeyEnvVarName() string {
+	if c == nil {
+		return DefaultAPIKeyEnvVar
+	}
+	if name := strings.TrimSpace(c.AI.APIKey); name != "" {
+		return name
+	}
+	return DefaultAPIKeyEnvVar
+}
+
+// RuntimeAPIKey 返回配置指向的环境变量中的 API Key，并去掉首尾空白。
+func (c *AppConfiguration) RuntimeAPIKey() string {
+	return strings.TrimSpace(os.Getenv(c.APIKeyEnvVarName()))
+}
+
+// RuntimeAPIKeyEnvVarName 返回全局配置当前使用的 API Key 环境变量名。
+func RuntimeAPIKeyEnvVarName() string {
+	if GlobalAppConfig != nil {
+		return GlobalAppConfig.APIKeyEnvVarName()
+	}
+	return DefaultAPIKeyEnvVar
+}
+
+// RuntimeAPIKey 返回全局配置指向的环境变量中的 API Key，并去掉首尾空白。
 func RuntimeAPIKey() string {
-	return strings.TrimSpace(os.Getenv(APIKeyEnvVar))
+	if GlobalAppConfig != nil {
+		return GlobalAppConfig.RuntimeAPIKey()
+	}
+	return strings.TrimSpace(os.Getenv(DefaultAPIKeyEnvVar))
 }
 
 // GetChatModelURL 从全局配置中查找聊天模型对应的 URL。

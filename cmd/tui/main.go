@@ -47,7 +47,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	model := core.NewModel(client, persona, historyTurns)
+	model := core.NewModel(client, persona, historyTurns, "config.yaml")
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "运行失败: %v\n", err)
@@ -63,20 +63,33 @@ func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 	if created {
 		fmt.Printf("已创建 %s\n", configPath)
 	}
-	if configs.RuntimeAPIKey() == "" {
-		fmt.Printf("未检测到环境变量 %s。请先在系统环境变量中设置 API Key 后重新启动。\n", configs.APIKeyEnvVar)
-		fmt.Println("Windows 示例: setx AI_API_KEY \"your-api-key\"")
-		return false, nil
-	}
 
 	for {
+		if cfg.RuntimeAPIKey() == "" {
+			envName := cfg.APIKeyEnvVarName()
+			fmt.Printf("未检测到环境变量 %s。可使用 /apikey <env_name> 切换变量名，或先设置该环境变量后再 /retry。\n", envName)
+			fmt.Printf("Windows 示例: setx %s \"your-api-key\"\n", envName)
+			result, handleErr := handleSetupDecision(scanner, cfg, false, configPath)
+			if handleErr != nil {
+				return false, handleErr
+			}
+			if result == setupExit {
+				return false, nil
+			}
+			continue
+		}
+
 		if err := provider.ValidateChatAPIKey(ctx, cfg); err == nil {
+			if saveErr := configs.WriteAppConfig(configPath, cfg); saveErr != nil {
+				return false, saveErr
+			}
+			configs.GlobalAppConfig = cfg
 			fmt.Println("API key 验证通过。")
 			return true, nil
 		} else if errors.Is(err, provider.ErrInvalidAPIKey) {
-			fmt.Printf("环境变量 %s 中的 API key 无效: %v\n", configs.APIKeyEnvVar, err)
+			fmt.Printf("环境变量 %s 中的 API key 无效: %v\n", cfg.APIKeyEnvVarName(), err)
 		} else if errors.Is(err, provider.ErrAPIKeyValidationSoft) {
-			fmt.Printf("无法确认环境变量 %s 中的 API key 有效性: %v\n", configs.APIKeyEnvVar, err)
+			fmt.Printf("无法确认环境变量 %s 中的 API key 有效性: %v\n", cfg.APIKeyEnvVarName(), err)
 			result, handleErr := handleSetupDecision(scanner, cfg, true, configPath)
 			if handleErr != nil {
 				return false, handleErr
@@ -116,9 +129,9 @@ const (
 
 func handleSetupDecision(scanner *bufio.Scanner, cfg *configs.AppConfiguration, allowContinue bool, configPath string) (setupDecision, error) {
 	for {
-		prompt := "选择 /retry, /models, /switch <model>, 或 /exit > "
+		prompt := "选择 /retry, /apikey <env_name>, /models, /switch <model>, 或 /exit > "
 		if allowContinue {
-			prompt = "选择 /retry, /continue, /models, /switch <model>, 或 /exit > "
+			prompt = "选择 /retry, /continue, /apikey <env_name>, /models, /switch <model>, 或 /exit > "
 		}
 		decision, ok, inputErr := readInteractiveLine(scanner, prompt)
 		if inputErr != nil {
@@ -135,6 +148,14 @@ func handleSetupDecision(scanner *bufio.Scanner, cfg *configs.AppConfiguration, 
 
 		switch strings.ToLower(fields[0]) {
 		case "/retry":
+			return setupRetry, nil
+		case "/apikey":
+			if len(fields) < 2 {
+				fmt.Println("用法: /apikey <env_name>")
+				continue
+			}
+			applyAPIKeyEnvName(cfg, fields[1])
+			fmt.Printf("已切换 API Key 环境变量名为: %s\n", cfg.APIKeyEnvVarName())
 			return setupRetry, nil
 		case "/continue":
 			if !allowContinue {
@@ -167,12 +188,19 @@ func handleSetupDecision(scanner *bufio.Scanner, cfg *configs.AppConfiguration, 
 			return setupExit, nil
 		default:
 			if allowContinue {
-				fmt.Println("请输入 /retry, /continue, /models, /switch <model>, 或 /exit。")
+				fmt.Println("请输入 /retry, /continue, /apikey <env_name>, /models, /switch <model>, 或 /exit。")
 			} else {
-				fmt.Println("请输入 /retry, /models, /switch <model>, 或 /exit。")
+				fmt.Println("请输入 /retry, /apikey <env_name>, /models, /switch <model>, 或 /exit。")
 			}
 		}
 	}
+}
+
+func applyAPIKeyEnvName(cfg *configs.AppConfiguration, envName string) {
+	if cfg == nil {
+		return
+	}
+	cfg.AI.APIKey = strings.TrimSpace(envName)
 }
 
 func readInteractiveLine(scanner *bufio.Scanner, prompt string) (string, bool, error) {

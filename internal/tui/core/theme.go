@@ -347,7 +347,3 @@ func HighlightCode(code string, lang string) string {
 func HighlightCodeInline(code string, lang string) string {
 	return HighlightCode(code, lang)
 }
-
-func detectLang(code string) string {
-	return DetectLanguage(code)
-}

@@ -11,9 +11,6 @@ import (
 )
 
 type SecurityConfigRepository interface {
-	LoadBlackList() (*domain.Config, error)
-	LoadWhiteList() (*domain.Config, error)
-	LoadYellowList() (*domain.Config, error)
 	LoadAll(configDir string) (*domain.Config, *domain.Config, *domain.Config, error)
 }
 
@@ -24,17 +21,17 @@ func NewSecurityConfigRepository() SecurityConfigRepository {
 }
 
 func (r *securityConfigRepositoryImpl) LoadAll(configDir string) (*domain.Config, *domain.Config, *domain.Config, error) {
-	blackList, err := r.LoadBlackList()
+	blackList, err := r.loadConfig(filepath.Join(configDir, "blacklist.yaml"))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("加载黑名单失败：%w", err)
 	}
 
-	whiteList, err := r.LoadWhiteList()
+	whiteList, err := r.loadConfig(filepath.Join(configDir, "whitelist.yaml"))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("加载白名单失败：%w", err)
 	}
 
-	yellowList, err := r.LoadYellowList()
+	yellowList, err := r.loadConfig(filepath.Join(configDir, "yellowlist.yaml"))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("加载黄名单失败：%w", err)
 	}
@@ -42,33 +39,19 @@ func (r *securityConfigRepositoryImpl) LoadAll(configDir string) (*domain.Config
 	return blackList, whiteList, yellowList, nil
 }
 
-func (r *securityConfigRepositoryImpl) LoadBlackList() (*domain.Config, error) {
-	return r.loadConfig("security/blacklist.yaml")
-}
-
-func (r *securityConfigRepositoryImpl) LoadWhiteList() (*domain.Config, error) {
-	return r.loadConfig("security/whitelist.yaml")
-}
-
-func (r *securityConfigRepositoryImpl) LoadYellowList() (*domain.Config, error) {
-	return r.loadConfig("security/yellowlist.yaml")
-}
-
-func (r *securityConfigRepositoryImpl) loadConfig(relativePath string) (*domain.Config, error) {
-	filePath := filepath.Join(relativePath)
-
+func (r *securityConfigRepositoryImpl) loadConfig(filePath string) (*domain.Config, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &domain.Config{Rules: []domain.Rule{}}, nil
 		}
-		return nil, fmt.Errorf("读取配置文件失败：%w", err)
+		return nil, fmt.Errorf("读取配置文件 [%s] 失败：%w", filePath, err)
 	}
 
 	var config domain.Config
 	err = yaml.Unmarshal(data, &config)
 	if err != nil {
-		return nil, fmt.Errorf("解析 YAML 配置失败：%w", err)
+		return nil, fmt.Errorf("解析 YAML 配置 [%s] 失败：%w", filePath, err)
 	}
 
 	return &config, nil

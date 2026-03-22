@@ -3,7 +3,7 @@ package core
 import (
 	"regexp"
 	"strings"
-	"unicode"
+	"unicode/utf8"
 )
 
 type TokenType int
@@ -434,140 +434,114 @@ func Tokenize(code string, lang string) []Token {
 func tokenizeLine(line string, lang string) []Token {
 	def := getLanguage(lang)
 	tokens := []Token{}
-
 	runes := []rune(line)
 	pos := 0
+
 	for pos < len(runes) {
 		matched := false
+		remaining := string(runes[pos:])
 
-		for _, rule := range def.Rules {
-			if rule.Type == TokenComment {
-				m := rule.Pattern.FindStringIndex(string(runes[pos:]))
-				if m != nil && m[0] == 0 {
-					content := string(runes[pos:])[:m[1]]
-					tokens = append(tokens, Token{Type: rule.Type, Content: content})
-					pos += runeLen(content)
-					matched = true
-					break
-				}
-			}
+		if m := matchRule(remaining, def.Rules, TokenComment); m != "" {
+			tokens = append(tokens, Token{Type: TokenComment, Content: m})
+			pos += utf8.RuneCountInString(m)
+			matched = true
+		} else if m := matchRule(remaining, def.Rules, TokenString); m != "" {
+			tokens = append(tokens, Token{Type: TokenString, Content: m})
+			pos += utf8.RuneCountInString(m)
+			matched = true
+		} else if m := matchRuleMulti(remaining, def.Rules, TokenNumber, TokenAnnotation, TokenPreProc); m != "" {
+			tokens = append(tokens, Token{Type: matchRuleType(def.Rules, m), Content: m})
+			pos += utf8.RuneCountInString(m)
+			matched = true
+		} else if m := matchKeyword(runes, pos, def.Keywords); m != "" {
+			tokens = append(tokens, Token{Type: TokenKeyword, Content: m})
+			pos += len(m)
+			matched = true
+		} else if m := matchKeyword(runes, pos, def.Constants); m != "" {
+			tokens = append(tokens, Token{Type: TokenConstant, Content: m})
+			pos += len(m)
+			matched = true
+		} else if m := matchKeyword(runes, pos, def.Types); m != "" {
+			tokens = append(tokens, Token{Type: TokenBuiltin, Content: m})
+			pos += len(m)
+			matched = true
+		} else if m := matchKeyword(runes, pos, def.Builtins); m != "" {
+			tokens = append(tokens, Token{Type: TokenFunction, Content: m})
+			pos += len(m)
+			matched = true
+		} else if m := identifierPat.FindString(remaining); m != "" && isFuncCall(runes, pos, len(m)) {
+			tokens = append(tokens, Token{Type: TokenFunction, Content: m})
+			pos += utf8.RuneCountInString(m)
+			matched = true
 		}
+
 		if matched {
 			continue
 		}
 
-		for _, rule := range def.Rules {
-			if rule.Type == TokenString {
-				m := rule.Pattern.FindStringIndex(string(runes[pos:]))
-				if m != nil && m[0] == 0 {
-					content := string(runes[pos:])[:m[1]]
-					tokens = append(tokens, Token{Type: rule.Type, Content: content})
-					pos += runeLen(content)
-					matched = true
-					break
-				}
-			}
-		}
-		if matched {
-			continue
-		}
-
-		for _, rule := range def.Rules {
-			if rule.Type == TokenNumber || rule.Type == TokenAnnotation || rule.Type == TokenPreProc {
-				m := rule.Pattern.FindStringIndex(string(runes[pos:]))
-				if m != nil && m[0] == 0 {
-					content := string(runes[pos:])[:m[1]]
-					tokens = append(tokens, Token{Type: rule.Type, Content: content})
-					pos += runeLen(content)
-					matched = true
-					break
-				}
-			}
-		}
-		if matched {
-			continue
-		}
-
-		for _, kw := range def.Keywords {
-			if hasKeywordByRune(runes, pos, kw) {
-				tokens = append(tokens, Token{Type: TokenKeyword, Content: kw})
-				pos += len(kw)
-				matched = true
-				break
-			}
-		}
-		if matched {
-			continue
-		}
-
-		for _, kw := range def.Constants {
-			if hasKeywordByRune(runes, pos, kw) {
-				tokens = append(tokens, Token{Type: TokenConstant, Content: kw})
-				pos += len(kw)
-				matched = true
-				break
-			}
-		}
-		if matched {
-			continue
-		}
-
-		for _, kw := range def.Types {
-			if hasKeywordByRune(runes, pos, kw) {
-				tokens = append(tokens, Token{Type: TokenBuiltin, Content: kw})
-				pos += len(kw)
-				matched = true
-				break
-			}
-		}
-		if matched {
-			continue
-		}
-
-		for _, kw := range def.Builtins {
-			if hasKeywordByRune(runes, pos, kw) {
-				tokens = append(tokens, Token{Type: TokenFunction, Content: kw})
-				pos += len(kw)
-				matched = true
-				break
-			}
-		}
-		if matched {
-			continue
-		}
-
-		m := regexp.MustCompile(`^[a-zA-Z_]\w*`).FindString(string(runes[pos:]))
-		if m != "" {
-			afterPos := pos + runeLen(m)
-			if afterPos < len(runes) && string(runes[afterPos]) == "(" {
-				tokens = append(tokens, Token{Type: TokenFunction, Content: m})
-				pos = afterPos
-				continue
-			}
-		}
-
-		op := string(runes[pos])
-		if isOperator(op) {
+		if op := string(runes[pos]); len(op) > 0 && operatorChars[rune(op[0])] {
 			tokens = append(tokens, Token{Type: TokenOperator, Content: op})
 			pos++
-			continue
-		}
-
-		if unicode.IsSpace(runes[pos]) {
+		} else {
 			tokens = append(tokens, Token{Type: TokenDefault, Content: string(runes[pos])})
 			pos++
-			continue
 		}
-
-		tokens = append(tokens, Token{Type: TokenDefault, Content: string(runes[pos])})
-		pos++
 	}
 
 	return tokens
 }
 
+var identifierPat = regexp.MustCompile(`^[a-zA-Z_]\w*`)
+
+func matchRule(s string, rules []LexRule, tokenType TokenType) string {
+	for _, r := range rules {
+		if r.Type == tokenType {
+			if m := r.Pattern.FindStringIndex(s); m != nil && m[0] == 0 {
+				return s[:m[1]]
+			}
+		}
+	}
+	return ""
+}
+
+func matchRuleMulti(s string, rules []LexRule, types ...TokenType) string {
+	for _, r := range rules {
+		for _, t := range types {
+			if r.Type == t {
+				if m := r.Pattern.FindStringIndex(s); m != nil && m[0] == 0 {
+					return s[:m[1]]
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func matchRuleType(rules []LexRule, match string) TokenType {
+	for _, r := range rules {
+		if r.Pattern.MatchString(match) {
+			return r.Type
+		}
+	}
+	return TokenDefault
+}
+
+func matchKeyword(runes []rune, pos int, keywords []string) string {
+	for _, kw := range keywords {
+		if hasKeywordByRune(runes, pos, kw) {
+			return kw
+		}
+	}
+	return ""
+}
+
+func isFuncCall(runes []rune, pos int, mLen int) bool {
+	afterPos := pos + mLen
+	return afterPos < len(runes) && runes[afterPos] == '('
+}
+
 func runeLen(s string) int {
-	return len([]rune(s))
+	return utf8.RuneCountInString(s)
 }
 
 func hasKeywordByRune(runes []rune, pos int, kw string) bool {
@@ -586,12 +560,22 @@ func hasKeywordByRune(runes []rune, pos int, kw string) bool {
 }
 
 func isIdentChar(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+	return r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+var operatorChars = map[rune]bool{
+	'+': true, '-': true, '*': true, '/': true, '%': true, '=': true,
+	'<': true, '>': true, '!': true, '&': true, '|': true, '^': true,
+	'~': true, ':': true, ';': true, ',': true, '.': true, '(': true,
+	')': true, '[': true, ']': true, '{': true, '}': true, '?': true,
+	'@': true, '#': true, '$': true,
 }
 
 func isOperator(op string) bool {
-	ops := "+-*/%=<>!&|^~:;,.()[]{}?@#$"
-	return strings.Contains(ops, op)
+	if len(op) == 0 {
+		return false
+	}
+	return operatorChars[rune(op[0])]
 }
 
 func buildKeywordPattern(keywords []string) *regexp.Regexp {

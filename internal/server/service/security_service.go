@@ -73,19 +73,27 @@ func (s *securityServiceImpl) matchesList(config *domain.Config, toolType, targe
 
 func ruleMatches(rule domain.Rule, toolType string, target string) bool {
 	var pattern string
+	var actionBit string
 
 	switch toolType {
-	case "Read", "Write":
+	case "Read":
 		pattern = rule.Target
+		actionBit = rule.Read
+	case "Write":
+		pattern = rule.Target
+		actionBit = rule.Write
 	case "Bash":
 		pattern = rule.Command
+		actionBit = rule.Exec
 	case "WebFetch":
 		pattern = rule.Domain
+		actionBit = rule.Network
 	default:
 		return false
 	}
 
-	if pattern == "" {
+	// 必须同时具备匹配模式和对应的权限位设置，防止规则短路
+	if pattern == "" || actionBit == "" {
 		return false
 	}
 
