@@ -15,6 +15,7 @@ type Message = domain.Message
 
 type ChatClient interface {
 	Chat(ctx context.Context, messages []Message, model string) (<-chan string, error)
+	RunAgent(ctx context.Context, messages []Message, model string) (<-chan domain.AgentEvent, error)
 	GetMemoryStats(ctx context.Context) (*MemoryStats, error)
 	ClearMemory(ctx context.Context) error
 	ClearSessionMemory(ctx context.Context) error
@@ -82,6 +83,11 @@ func (c *localChatClient) Chat(ctx context.Context, messages []Message, model st
 	}
 	chatSvc := service.NewChatService(c.memorySvc, c.workingSvc, c.roleSvc, chatProvider)
 	return chatSvc.Send(ctx, &domain.ChatRequest{Messages: messages, Model: model})
+}
+
+// RunAgent 通过独立的 agent runtime 执行 JSON 工具调用循环。
+func (c *localChatClient) RunAgent(ctx context.Context, messages []Message, model string) (<-chan domain.AgentEvent, error) {
+	return RunAgent(ctx, c, messages, model)
 }
 
 // GetMemoryStats 返回 TUI 所需的当前记忆统计信息。

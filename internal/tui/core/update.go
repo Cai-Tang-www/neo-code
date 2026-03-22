@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/domain"
 	"go-llm-demo/internal/server/infra/provider"
-	servertools "go-llm-demo/internal/server/infra/tools"
 	"go-llm-demo/internal/tui/infra"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,7 +35,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.generating {
 			m.AppendLastMessage(msg.Content)
 		}
-		return m, waitForAgentEvent(m.agentEvents)
+		return m, nil
 	case StreamDoneMsg:
 		m.generating = false
 		m.toolExecuting = false
@@ -51,34 +49,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.TrimHistory(m.historyTurns)
 		return m, nil
 	case AgentEventMsg:
-		if msg.Event.Message != "" {
-			m.AddMessage("system", msg.Event.Message)
+		nextModel, nextCmd := m.handleAgentEvent(msg.Event)
+		if msg.Event.Type == "stream.done" || msg.Event.Type == "stream.error" {
+			return nextModel, nextCmd
 		}
-		return m, waitForAgentEvent(m.agentEvents)
-	case ToolCallDetectedMsg:
-		m.toolExecuting = true
-		m.generating = false
-		m.MarkLastMessageStreaming(false)
-		m.AddMessage("system", fmt.Sprintf("检测到工具调用: %s", msg.Call.Tool))
-		return m, waitForAgentEvent(m.agentEvents)
-	case ToolExecutionStartMsg:
-		m.toolExecuting = true
-		m.AddMessage("system", formatToolProgress(msg.Call))
-		return m, waitForAgentEvent(m.agentEvents)
-	case ToolResultMsg:
-		m.toolExecuting = false
-		m.AddMessage("system", fmt.Sprintf("工具执行结果(%s): %s", msg.Result.ToolName, strings.TrimSpace(msg.Result.Output)))
-		m.AddMessage("assistant", "")
-		m.MarkLastMessageStreaming(true)
-		m.generating = true
-		return m, waitForAgentEvent(m.agentEvents)
-	case ToolErrorMsg:
-		m.toolExecuting = false
-		m.AddMessage("system", fmt.Sprintf("工具执行错误: %v", msg.Err))
-		m.AddMessage("assistant", "")
-		m.MarkLastMessageStreaming(true)
-		m.generating = true
-		return m, waitForAgentEvent(m.agentEvents)
+		if nextCmd != nil {
+			return nextModel, tea.Sequence(nextCmd, waitForAgentEvent(m.agentEvents))
+		}
+		return nextModel, waitForAgentEvent(m.agentEvents)
 	case ShowHelpMsg:
 		m.mode = ModeHelp
 		return m, nil
@@ -98,69 +76,92 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func waitForAgentEvent(ch <-chan tea.Msg) tea.Cmd {
+func (m *Model) handleAgentEvent(event domain.AgentEvent) (tea.Model, tea.Cmd) {
+	switch event.Type {
+	case "agent.thought", "tool.parse.warning":
+		if event.Message != "" {
+			m.AddMessage("system", event.Message)
+		}
+		return *m, nil
+	case "stream.chunk":
+		if content, ok := event.Data["content"].(string); ok && content != "" {
+			m.AppendLastMessage(content)
+		}
+		return *m, nil
+	case "tool.detected":
+		m.toolExecuting = true
+		m.generating = false
+		m.MarkLastMessageStreaming(false)
+		if event.Message != "" {
+			m.AddMessage("system", event.Message)
+		}
+		return *m, nil
+	case "tool.started":
+		m.toolExecuting = true
+		if event.Message != "" {
+			m.AddMessage("system", event.Message)
+		}
+		return *m, nil
+	case "tool.result":
+		m.toolExecuting = false
+		if event.Message != "" {
+			m.AddMessage("system", event.Message)
+		}
+		m.AddMessage("assistant", "")
+		m.MarkLastMessageStreaming(true)
+		m.generating = true
+		return *m, nil
+	case "tool.error":
+		m.toolExecuting = false
+		if event.Message != "" {
+			m.AddMessage("system", event.Message)
+		}
+		m.AddMessage("assistant", "")
+		m.MarkLastMessageStreaming(true)
+		m.generating = true
+		return *m, nil
+	case "stream.error":
+		m.generating = false
+		m.toolExecuting = false
+		m.MarkLastMessageStreaming(false)
+		if event.Message != "" {
+			m.AddMessage("assistant", fmt.Sprintf("错误: %s", event.Message))
+		}
+		return *m, nil
+	case "stream.done":
+		m.generating = false
+		m.toolExecuting = false
+		m.MarkLastMessageStreaming(false)
+		return *m, nil
+	default:
+		if event.Message != "" {
+			m.AddMessage("system", event.Message)
+		}
+		return *m, nil
+	}
+}
+
+func waitForAgentEvent(stream <-chan domain.AgentEvent) tea.Cmd {
 	return func() tea.Msg {
-		msg, ok := <-ch
+		event, ok := <-stream
 		if !ok {
 			return StreamDoneMsg{}
 		}
-		return msg
+		return AgentEventMsg{Event: event}
 	}
-}
-
-func (m *Model) emitAgentMsg(msg tea.Msg) {
-	m.agentEvents <- msg
 }
 
 func (m *Model) startAgentLoop(messages []infra.Message) tea.Cmd {
-	go m.runAgentLoop(messages)
-	return waitForAgentEvent(m.agentEvents)
-}
-
-func (m *Model) runAgentLoop(initial []infra.Message) {
-	messages := append([]infra.Message{}, initial...)
-	for step := 0; step < maxToolSteps; step++ {
-		m.emitAgentMsg(AgentEventMsg{Event: domain.AgentEvent{Type: "agent.thought", Message: fmt.Sprintf("第 %d 步：请求模型响应", step+1)}})
-		stream, err := m.client.Chat(context.Background(), messages, m.activeModel)
-		if err != nil {
-			m.emitAgentMsg(StreamErrorMsg{Err: err})
-			return
-		}
-
-		var replyBuilder strings.Builder
-		for chunk := range stream {
-			replyBuilder.WriteString(chunk)
-			m.emitAgentMsg(StreamChunkMsg{Content: chunk})
-		}
-
-		reply := strings.TrimSpace(replyBuilder.String())
-		call, ok, err := extractToolCall(reply)
-		if err != nil {
-			m.emitAgentMsg(AgentEventMsg{Event: domain.AgentEvent{Type: "tool.parse.warning", Message: fmt.Sprintf("工具调用解析失败，按普通回复处理: %v", err)}})
-			m.emitAgentMsg(StreamDoneMsg{})
-			return
-		}
-		if !ok {
-			m.emitAgentMsg(StreamDoneMsg{})
-			return
-		}
-
-		m.emitAgentMsg(ToolCallDetectedMsg{Call: call})
-		m.emitAgentMsg(ToolExecutionStartMsg{Call: call})
-		result := servertools.GlobalRegistry.Execute(call)
-		observation := ""
-		if result.Success {
-			m.emitAgentMsg(ToolResultMsg{Result: result})
-			observation = fmt.Sprintf("工具执行结果(%s): %s", result.ToolName, strings.TrimSpace(result.Output))
-		} else {
-			errMsg := fmt.Errorf("%s", result.Error)
-			m.emitAgentMsg(ToolErrorMsg{Err: errMsg})
-			observation = fmt.Sprintf("工具执行错误(%s): %s", result.ToolName, result.Error)
-		}
-
-		messages = append(messages, infra.Message{Role: "system", Content: observation}, infra.Message{Role: "assistant", Content: ""})
+	stream, err := m.client.RunAgent(context.Background(), messages, m.activeModel)
+	if err != nil {
+		return func() tea.Msg { return StreamErrorMsg{Err: err} }
 	}
-	m.emitAgentMsg(StreamErrorMsg{Err: fmt.Errorf("工具调用超过最大步数 %d", maxToolSteps)})
+	go func() {
+		for event := range stream {
+			m.agentEvents <- event
+		}
+	}()
+	return waitForAgentEvent(m.agentEvents)
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -535,92 +536,6 @@ func (m *Model) sendCodeToAI(code string) tea.Cmd {
 	m.generating = true
 	messages := m.buildMessages()
 	return m.startAgentLoop(messages)
-}
-
-func extractToolCall(content string) (domain.ToolCall, bool, error) {
-	candidates := []string{strings.TrimSpace(content)}
-	candidates = append(candidates, extractJSONCodeBlocks(content)...)
-	if obj := extractFirstJSONObject(content); obj != "" {
-		candidates = append(candidates, obj)
-	}
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		var call domain.ToolCall
-		if err := json.Unmarshal([]byte(candidate), &call); err != nil {
-			continue
-		}
-		if strings.TrimSpace(call.Tool) == "" {
-			continue
-		}
-		call.Params = servertools.NormalizeParams(call.Params)
-		return call, true, nil
-	}
-	if strings.Contains(content, "\"tool\"") {
-		return domain.ToolCall{}, false, fmt.Errorf("检测到 tool 字段但未能提取合法 JSON")
-	}
-	return domain.ToolCall{}, false, nil
-}
-
-func extractJSONCodeBlocks(content string) []string {
-	parts := strings.Split(content, "```")
-	blocks := make([]string, 0)
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "json") {
-			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "json"))
-		}
-		if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
-			blocks = append(blocks, trimmed)
-		}
-	}
-	return blocks
-}
-
-func extractFirstJSONObject(content string) string {
-	start := strings.Index(content, "{")
-	if start < 0 {
-		return ""
-	}
-	depth := 0
-	inString := false
-	escaped := false
-	for i := start; i < len(content); i++ {
-		ch := content[i]
-		if inString {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if ch == '\\' {
-				escaped = true
-				continue
-			}
-			if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-		if ch == '"' {
-			inString = true
-			continue
-		}
-		if ch == '{' {
-			depth++
-		}
-		if ch == '}' {
-			depth--
-			if depth == 0 {
-				return content[start : i+1]
-			}
-		}
-	}
-	return ""
 }
 
 func runCodeCmd(code string) tea.Cmd {

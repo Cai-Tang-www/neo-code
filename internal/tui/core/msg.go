@@ -3,7 +3,6 @@ package core
 import (
 	"github.com/charmbracelet/bubbletea"
 	"go-llm-demo/internal/server/domain"
-	"go-llm-demo/internal/server/infra/tools"
 )
 
 type Msg interface{ isMsg() }
@@ -38,35 +37,27 @@ type (
 	ExitMsg          struct{}
 	RefreshMemoryMsg struct{}
 
-	AgentEventMsg         struct{ Event domain.AgentEvent }
-	ToolCallDetectedMsg   struct{ Call domain.ToolCall }
-	ToolExecutionStartMsg struct{ Call domain.ToolCall }
-	ToolResultMsg         struct{ Result *tools.ToolResult }
-	ToolErrorMsg          struct{ Err error }
+	AgentEventMsg struct{ Event domain.AgentEvent }
 )
 
-func (InitMsg) isMsg()               {}
-func (ResizeMsg) isMsg()             {}
-func (InputMsg) isMsg()              {}
-func (CodeLineMsg) isMsg()           {}
-func (CodeDelimiterMsg) isMsg()      {}
-func (SubmitMsg) isMsg()             {}
-func (CancelMsg) isMsg()             {}
-func (StreamChunkMsg) isMsg()        {}
-func (StreamDoneMsg) isMsg()         {}
-func (StreamErrorMsg) isMsg()        {}
-func (CommandMsg) isMsg()            {}
-func (SwitchModelMsg) isMsg()        {}
-func (MemoryStatsMsg) isMsg()        {}
-func (ShowHelpMsg) isMsg()           {}
-func (HideHelpMsg) isMsg()           {}
-func (ExitMsg) isMsg()               {}
-func (RefreshMemoryMsg) isMsg()      {}
-func (AgentEventMsg) isMsg()         {}
-func (ToolCallDetectedMsg) isMsg()   {}
-func (ToolExecutionStartMsg) isMsg() {}
-func (ToolResultMsg) isMsg()         {}
-func (ToolErrorMsg) isMsg()          {}
+func (InitMsg) isMsg()          {}
+func (ResizeMsg) isMsg()        {}
+func (InputMsg) isMsg()         {}
+func (CodeLineMsg) isMsg()      {}
+func (CodeDelimiterMsg) isMsg() {}
+func (SubmitMsg) isMsg()        {}
+func (CancelMsg) isMsg()        {}
+func (StreamChunkMsg) isMsg()   {}
+func (StreamDoneMsg) isMsg()    {}
+func (StreamErrorMsg) isMsg()   {}
+func (CommandMsg) isMsg()       {}
+func (SwitchModelMsg) isMsg()   {}
+func (MemoryStatsMsg) isMsg()   {}
+func (ShowHelpMsg) isMsg()      {}
+func (HideHelpMsg) isMsg()      {}
+func (ExitMsg) isMsg()          {}
+func (RefreshMemoryMsg) isMsg() {}
+func (AgentEventMsg) isMsg()    {}
 
 type TickMsg struct{}
 

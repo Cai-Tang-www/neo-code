@@ -5,9 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"go-llm-demo/configs"
+	"go-llm-demo/internal/server/domain"
 	"go-llm-demo/internal/tui/infra"
 )
 
@@ -50,7 +51,7 @@ type Model struct {
 	apiKeyReady   bool
 	configPath    string
 
-	agentEvents chan tea.Msg
+	agentEvents chan domain.AgentEvent
 
 	mu sync.Mutex
 }
@@ -95,7 +96,7 @@ func NewModel(client infra.ChatClient, persona string, historyTurns int, configP
 		persona:        persona,
 		apiKeyReady:    configs.RuntimeAPIKey() != "",
 		configPath:     configPath,
-		agentEvents:    make(chan tea.Msg, 128),
+		agentEvents:    make(chan domain.AgentEvent, 128),
 	}
 }
 
