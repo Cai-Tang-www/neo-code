@@ -14,184 +14,162 @@ import (
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/domain"
 	"go-llm-demo/internal/server/infra/provider"
-	"go-llm-demo/internal/server/infra/tools"
+	servertools "go-llm-demo/internal/server/infra/tools"
 	"go-llm-demo/internal/tui/infra"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+const maxToolSteps = 8
 
 // Update 处理 Bubble Tea 事件并驱动聊天状态更新。
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
-
 	case tea.WindowSizeMsg:
 		m.SetWidth(msg.Width)
 		m.SetHeight(msg.Height)
 		return m, nil
-
 	case tea.KeyMsg:
 		return m.handleKey(msg)
-
 	case StreamChunkMsg:
 		if m.generating {
 			m.AppendLastMessage(msg.Content)
 		}
-		return m, nil
-
+		return m, waitForAgentEvent(m.agentEvents)
 	case StreamDoneMsg:
-		m.mu.Lock()
 		m.generating = false
-		m.FinishLastMessage()
-
-		// 检查最后一条AI消息是否为JSON格式的工具调用
-		if !m.toolExecuting && len(m.messages) > 0 {
-			lastMsg := &m.messages[len(m.messages)-1]
-			if lastMsg.Role == "assistant" {
-				// 验证是否为JSON
-				var jsonData map[string]interface{}
-				if err := json.Unmarshal([]byte(lastMsg.Content), &jsonData); err == nil {
-					// 检查是否包含工具调用字段
-					if toolName, ok := jsonData["tool"].(string); ok && toolName != "" {
-						m.toolExecuting = true
-						m.mu.Unlock()
-
-						// 显示工具执行中提示
-						if toolParams, ok := jsonData["params"].(map[string]interface{}); ok {
-							if filePath, ok := toolParams["filePath"].(string); ok && toolName == "read" {
-								m.AddMessage("system", fmt.Sprintf("read:正在读取%s文件...", filePath))
-							} else if filePath, ok := toolParams["filePath"].(string); ok && (toolName == "edit" || toolName == "write") {
-								m.AddMessage("system", fmt.Sprintf("%s:正在处理%s文件...", toolName, filePath))
-							} else {
-								m.AddMessage("system", fmt.Sprintf("%s:正在执行工具...", toolName))
-							}
-						}
-
-						// 在goroutine中执行工具调用
-						return m, func() tea.Msg {
-							// 创建工具实例并执行
-							var tool tools.Tool
-							switch toolName {
-							case "read":
-								tool = &tools.ReadTool{}
-							case "write":
-								tool = &tools.WriteTool{}
-							case "edit":
-								tool = &tools.EditTool{}
-							case "bash":
-								tool = &tools.BashTool{}
-							case "list":
-								tool = &tools.ListTool{}
-							case "grep":
-								tool = &tools.GrepTool{}
-							default:
-								m.mu.Lock()
-								m.toolExecuting = false
-								m.mu.Unlock()
-								return ToolErrorMsg{Err: fmt.Errorf("不支持的工具: %s", toolName)}
-							}
-
-							// 安全地获取并转换参数
-							var paramsMap map[string]interface{}
-							if paramsRaw, ok := jsonData["params"]; ok {
-								if paramsCasted, ok := paramsRaw.(map[string]interface{}); ok {
-									paramsMap = convertSnakeCaseToCamelCase(paramsCasted)
-								} else {
-									m.mu.Lock()
-									m.toolExecuting = false
-									m.mu.Unlock()
-									return ToolErrorMsg{Err: fmt.Errorf("工具参数格式错误")}
-								}
-							} else {
-								paramsMap = make(map[string]interface{})
-							}
-
-							// 执行工具
-							result := tool.Run(paramsMap)
-
-							// 将结果作为系统消息返回
-							if result.Success {
-								return ToolResultMsg{Result: result}
-							} else {
-								return ToolErrorMsg{Err: fmt.Errorf("%s", result.Error)}
-							}
-						}
-					}
-				}
-			}
-		}
-		m.mu.Unlock()
-
+		m.toolExecuting = false
+		m.MarkLastMessageStreaming(false)
 		return m, nil
-
 	case StreamErrorMsg:
 		m.generating = false
+		m.toolExecuting = false
+		m.MarkLastMessageStreaming(false)
 		m.AddMessage("assistant", fmt.Sprintf("错误: %v", msg.Err))
 		m.TrimHistory(m.historyTurns)
 		return m, nil
-
+	case AgentEventMsg:
+		if msg.Event.Message != "" {
+			m.AddMessage("system", msg.Event.Message)
+		}
+		return m, waitForAgentEvent(m.agentEvents)
+	case ToolCallDetectedMsg:
+		m.toolExecuting = true
+		m.generating = false
+		m.MarkLastMessageStreaming(false)
+		m.AddMessage("system", fmt.Sprintf("检测到工具调用: %s", msg.Call.Tool))
+		return m, waitForAgentEvent(m.agentEvents)
+	case ToolExecutionStartMsg:
+		m.toolExecuting = true
+		m.AddMessage("system", formatToolProgress(msg.Call))
+		return m, waitForAgentEvent(m.agentEvents)
+	case ToolResultMsg:
+		m.toolExecuting = false
+		m.AddMessage("system", fmt.Sprintf("工具执行结果(%s): %s", msg.Result.ToolName, strings.TrimSpace(msg.Result.Output)))
+		m.AddMessage("assistant", "")
+		m.MarkLastMessageStreaming(true)
+		m.generating = true
+		return m, waitForAgentEvent(m.agentEvents)
+	case ToolErrorMsg:
+		m.toolExecuting = false
+		m.AddMessage("system", fmt.Sprintf("工具执行错误: %v", msg.Err))
+		m.AddMessage("assistant", "")
+		m.MarkLastMessageStreaming(true)
+		m.generating = true
+		return m, waitForAgentEvent(m.agentEvents)
 	case ShowHelpMsg:
 		m.mode = ModeHelp
 		return m, nil
-
 	case HideHelpMsg:
 		m.mode = ModeChat
 		return m, nil
-
 	case RefreshMemoryMsg:
 		stats, err := m.client.GetMemoryStats(context.Background())
 		if err == nil && stats != nil {
 			m.memoryStats = *stats
 		}
 		return m, nil
-
 	case ExitMsg:
 		return m, tea.Quit
-
-	case ToolResultMsg:
-		m.mu.Lock()
-		m.toolExecuting = false
-		m.mu.Unlock()
-		// 将工具执行结果添加为系统消息，然后重新获取AI响应
-		m.AddMessage("system", fmt.Sprintf("工具执行结果: %s", msg.Result.Output))
-		m.AddMessage("assistant", "")
-		m.generating = true
-
-		// 构建包含工具结果的消息并重新请求AI
-		messages := m.buildMessages()
-		return m, m.streamResponse(messages)
-
-	case ToolErrorMsg:
-		m.mu.Lock()
-		m.toolExecuting = false
-		m.mu.Unlock()
-		// 将工具执行错误添加为系统消息
-		m.AddMessage("system", fmt.Sprintf("工具执行错误: %v", msg.Err))
-		m.AddMessage("assistant", "")
-		m.generating = true
-
-		// 构建包含错误信息的消息并重新请求AI
-		messages := m.buildMessages()
-		return m, m.streamResponse(messages)
 	}
 
 	return m, cmd
 }
 
+func waitForAgentEvent(ch <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return StreamDoneMsg{}
+		}
+		return msg
+	}
+}
+
+func (m *Model) emitAgentMsg(msg tea.Msg) {
+	m.agentEvents <- msg
+}
+
+func (m *Model) startAgentLoop(messages []infra.Message) tea.Cmd {
+	go m.runAgentLoop(messages)
+	return waitForAgentEvent(m.agentEvents)
+}
+
+func (m *Model) runAgentLoop(initial []infra.Message) {
+	messages := append([]infra.Message{}, initial...)
+	for step := 0; step < maxToolSteps; step++ {
+		m.emitAgentMsg(AgentEventMsg{Event: domain.AgentEvent{Type: "agent.thought", Message: fmt.Sprintf("第 %d 步：请求模型响应", step+1)}})
+		stream, err := m.client.Chat(context.Background(), messages, m.activeModel)
+		if err != nil {
+			m.emitAgentMsg(StreamErrorMsg{Err: err})
+			return
+		}
+
+		var replyBuilder strings.Builder
+		for chunk := range stream {
+			replyBuilder.WriteString(chunk)
+			m.emitAgentMsg(StreamChunkMsg{Content: chunk})
+		}
+
+		reply := strings.TrimSpace(replyBuilder.String())
+		call, ok, err := extractToolCall(reply)
+		if err != nil {
+			m.emitAgentMsg(AgentEventMsg{Event: domain.AgentEvent{Type: "tool.parse.warning", Message: fmt.Sprintf("工具调用解析失败，按普通回复处理: %v", err)}})
+			m.emitAgentMsg(StreamDoneMsg{})
+			return
+		}
+		if !ok {
+			m.emitAgentMsg(StreamDoneMsg{})
+			return
+		}
+
+		m.emitAgentMsg(ToolCallDetectedMsg{Call: call})
+		m.emitAgentMsg(ToolExecutionStartMsg{Call: call})
+		result := servertools.GlobalRegistry.Execute(call)
+		observation := ""
+		if result.Success {
+			m.emitAgentMsg(ToolResultMsg{Result: result})
+			observation = fmt.Sprintf("工具执行结果(%s): %s", result.ToolName, strings.TrimSpace(result.Output))
+		} else {
+			errMsg := fmt.Errorf("%s", result.Error)
+			m.emitAgentMsg(ToolErrorMsg{Err: errMsg})
+			observation = fmt.Sprintf("工具执行错误(%s): %s", result.ToolName, result.Error)
+		}
+
+		messages = append(messages, infra.Message{Role: "system", Content: observation}, infra.Message{Role: "assistant", Content: ""})
+	}
+	m.emitAgentMsg(StreamErrorMsg{Err: fmt.Errorf("工具调用超过最大步数 %d", maxToolSteps)})
+}
+
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
-
 	case tea.KeyEnter:
 		m.lastKeyWasEnter = true
 		return m.handleNewline()
-
-	case tea.KeyF5:
+	case tea.KeyF5, tea.KeyF8:
 		return m.handleSubmit()
-
-	case tea.KeyF8:
-		return m.handleSubmit()
-
 	case tea.KeyUp:
 		if m.multilineMode {
 			m.moveCursorUp()
@@ -208,7 +186,6 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return *m, nil
-
 	case tea.KeyDown:
 		if m.multilineMode {
 			m.moveCursorDown()
@@ -222,45 +199,34 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inputBuffer = ""
 		}
 		return *m, nil
-
 	case tea.KeyLeft:
 		if m.multilineMode {
 			m.moveCursorLeft()
-			return *m, nil
 		}
 		return *m, nil
-
 	case tea.KeyRight:
 		if m.multilineMode {
 			m.moveCursorRight()
-			return *m, nil
 		}
 		return *m, nil
-
 	case tea.KeyHome:
 		if m.multilineMode {
 			m.cursorCol = 0
-			return *m, nil
 		}
 		return *m, nil
-
 	case tea.KeyEnd:
 		if m.multilineMode {
 			lines := strings.Split(m.inputBuffer, "\n")
 			if m.cursorLine < len(lines) {
 				m.cursorCol = len(lines[m.cursorLine])
 			}
-			return *m, nil
 		}
 		return *m, nil
-
 	case tea.KeyDelete:
 		if m.multilineMode {
 			m.deleteCharAtCursor()
-			return *m, nil
 		}
 		return *m, nil
-
 	case tea.KeyTab:
 		if m.multilineMode {
 			m.insertAtCursor("\t")
@@ -268,28 +234,20 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inputBuffer += "\t"
 		}
 		return *m, nil
-
 	case tea.KeyRunes:
 		if m.lastKeyWasEnter {
 			m.lastKeyWasEnter = false
 			runes := msg.Runes
 			if len(runes) == 1 && runes[0] == 27 {
-				m.lastKeyWasEnter = false
 				return m.handleSubmit()
 			}
 		}
-
-		// 检测是否是粘贴事件（bracked paste mode）
 		pasteField := reflect.ValueOf(msg).FieldByName("Paste")
 		isPaste := pasteField.IsValid() && pasteField.Bool()
-
 		r := string(msg.Runes)
-
-		// 如果是粘贴，自动进入多行模式
 		if isPaste && !m.multilineMode && strings.Contains(r, "\n") {
 			m.enterMultilineMode()
 		}
-
 		if len(r) > 0 && (r[0] >= 32 || r[0] == 9) {
 			if m.multilineMode {
 				m.insertAtCursor(r)
@@ -298,32 +256,26 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.cursorCol++
 			}
 		} else if len(r) > 0 && r[0] < 32 && r[0] != 9 {
-			// 处理控制字符（如换行）
-			if r[0] == 10 || r[0] == 13 { // \n or \r
+			if r[0] == 10 || r[0] == 13 {
 				m.handleNewline()
 			}
 		}
 		m.cmdHistIndex = -1
 		return *m, nil
-
 	case tea.KeyBackspace:
 		if m.multilineMode {
 			m.backspaceAtCursor()
-		} else {
-			if len(m.inputBuffer) > 0 {
-				runes := []rune(m.inputBuffer)
-				m.inputBuffer = string(runes[:len(runes)-1])
-			}
+		} else if len(m.inputBuffer) > 0 {
+			runes := []rune(m.inputBuffer)
+			m.inputBuffer = string(runes[:len(runes)-1])
 		}
 		return *m, nil
-
 	case tea.KeyEsc:
 		if m.mode == ModeHelp {
 			m.mode = ModeChat
 		}
 		return *m, nil
 	}
-
 	return *m, nil
 }
 
@@ -331,28 +283,22 @@ func (m *Model) handleNewline() (tea.Model, tea.Cmd) {
 	if !m.multilineMode {
 		m.enterMultilineMode()
 	}
-
 	lines := strings.Split(m.inputBuffer, "\n")
 	if m.cursorLine < len(lines) {
 		line := lines[m.cursorLine]
 		runes := []rune(line)
-
 		if m.cursorCol > len(runes) {
 			m.cursorCol = len(runes)
 		}
-
 		before := string(runes[:m.cursorCol])
 		after := string(runes[m.cursorCol:])
-
 		lines[m.cursorLine] = before
-
 		newLines := make([]string, 0, len(lines)+1)
 		newLines = append(newLines, lines[:m.cursorLine+1]...)
 		newLines = append(newLines, after)
 		if m.cursorLine < len(lines)-1 {
 			newLines = append(newLines, lines[m.cursorLine+1:]...)
 		}
-
 		m.inputBuffer = strings.Join(newLines, "\n")
 	} else {
 		m.inputBuffer += "\n"
@@ -366,20 +312,15 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	m.multilineMode = false
 	m.cursorLine = 0
 	m.cursorCol = 0
-
 	input := strings.TrimSpace(m.inputBuffer)
 	m.inputBuffer = ""
-
 	if input == "" {
 		return *m, nil
 	}
-
-	switch m.mode {
-	case ModeHelp:
+	if m.mode == ModeHelp {
 		m.mode = ModeChat
 		return *m, nil
 	}
-
 	if strings.HasPrefix(input, "/") {
 		return m.handleCommand(input)
 	}
@@ -387,18 +328,15 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 		m.AddMessage("assistant", "当前 API Key 未通过校验，请使用 /apikey <env_name> 切换变量名，或 /exit 退出。")
 		return *m, nil
 	}
-
 	m.AddMessage("user", input)
 	m.AddMessage("assistant", "")
-	// 在请求发出前先裁剪原始消息，避免 UI 历史无限扩张并影响短期上下文质量。
+	m.MarkLastMessageStreaming(true)
 	m.TrimHistory(m.historyTurns)
 	m.generating = true
-
 	m.commandHistory = append(m.commandHistory, input)
 	m.cmdHistIndex = -1
-
 	messages := m.buildMessages()
-	return *m, m.streamResponse(messages)
+	return *m, m.startAgentLoop(messages)
 }
 
 func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
@@ -406,14 +344,12 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	if len(fields) == 0 {
 		return *m, nil
 	}
-
 	cmd := fields[0]
 	args := fields[1:]
 	if !m.apiKeyReady && !isAPIKeyRecoveryCommand(cmd) {
 		m.AddMessage("assistant", "当前 API Key 未通过校验，仅支持 /apikey <env_name>、/help、/models、/switch <model> 或 /exit。")
 		return *m, nil
 	}
-
 	switch cmd {
 	case "/help":
 		m.mode = ModeHelp
@@ -479,10 +415,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			return *m, nil
 		}
 		m.memoryStats = *stats
-		m.AddMessage("assistant", fmt.Sprintf(
-			"记忆统计:\n  长期: %d\n  会话: %d\n  总计: %d\n  TopK: %d\n  最小分数: %.2f\n  文件: %s\n  类型: %s",
-			stats.PersistentItems, stats.SessionItems, stats.TotalItems, stats.TopK, stats.MinScore, stats.Path, formatTypeStats(stats.ByType),
-		))
+		m.AddMessage("assistant", fmt.Sprintf("记忆统计:\n  长期: %d\n  会话: %d\n  总计: %d\n  TopK: %d\n  最小分数: %.2f\n  文件: %s\n  类型: %s", stats.PersistentItems, stats.SessionItems, stats.TotalItems, stats.TopK, stats.MinScore, stats.Path, formatTypeStats(stats.ByType)))
 	case "/clear-memory":
 		if len(args) == 0 || args[0] != "confirm" {
 			m.AddMessage("assistant", "此命令会清空长期记忆。请使用 /clear-memory confirm")
@@ -504,10 +437,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		m.messages = nil
 		if m.persona != "" {
-			m.messages = append(m.messages, Message{
-				Role:    "system",
-				Content: m.persona,
-			})
+			m.messages = append(m.messages, Message{Role: "system", Content: m.persona})
 		}
 		stats, _ := m.client.GetMemoryStats(context.Background())
 		if stats != nil {
@@ -517,10 +447,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	case "/run":
 		if len(args) > 0 {
 			code := strings.Join(args, " ")
-			return *m, tea.Batch(
-				tea.Printf("\n--- 运行代码 ---\n"),
-				runCodeCmd(code),
-			)
+			return *m, tea.Batch(tea.Printf("\n--- 运行代码 ---\n"), runCodeCmd(code))
 		}
 	case "/explain":
 		if len(args) > 0 {
@@ -531,7 +458,6 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	default:
 		m.AddMessage("assistant", fmt.Sprintf("未知命令: %s，输入 /help 查看帮助", cmd))
 	}
-
 	return *m, nil
 }
 
@@ -557,13 +483,7 @@ func formatTypeStats(byType map[string]int) string {
 	if len(byType) == 0 {
 		return "无"
 	}
-	ordered := []string{
-		domain.TypeUserPreference,
-		domain.TypeProjectRule,
-		domain.TypeCodeFact,
-		domain.TypeFixRecipe,
-		domain.TypeSessionMemory,
-	}
+	ordered := []string{domain.TypeUserPreference, domain.TypeProjectRule, domain.TypeCodeFact, domain.TypeFixRecipe, domain.TypeSessionMemory}
 	parts := make([]string, 0, len(byType))
 	for _, key := range ordered {
 		if count := byType[key]; count > 0 {
@@ -576,77 +496,131 @@ func formatTypeStats(byType map[string]int) string {
 	return strings.Join(parts, ", ")
 }
 
+func formatToolProgress(call domain.ToolCall) string {
+	params := servertools.NormalizeParams(call.Params)
+	if filePath, ok := params["filePath"].(string); ok && filePath != "" {
+		return fmt.Sprintf("%s: 正在处理 %s", call.Tool, filePath)
+	}
+	if workdir, ok := params["workdir"].(string); ok && workdir != "" {
+		return fmt.Sprintf("%s: 在 %s 中执行工具", call.Tool, workdir)
+	}
+	return fmt.Sprintf("%s: 正在执行工具...", call.Tool)
+}
+
 func (m *Model) buildMessages() []infra.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	result := make([]infra.Message, 0, len(m.messages))
-
 	for _, msg := range m.messages {
 		if msg.Role == "system" {
-			result = append(result, infra.Message{
-				Role:    msg.Role,
-				Content: msg.Content,
-			})
+			result = append(result, infra.Message{Role: msg.Role, Content: msg.Content})
 		}
 	}
-
 	for _, msg := range m.messages {
 		if msg.Role != "system" {
-			result = append(result, infra.Message{
-				Role:    msg.Role,
-				Content: msg.Content,
-			})
+			result = append(result, infra.Message{Role: msg.Role, Content: msg.Content})
 		}
 	}
-
 	return result
 }
 
-func (m *Model) streamResponse(messages []infra.Message) tea.Cmd {
-	return func() tea.Msg {
-		stream, err := m.client.Chat(context.Background(), messages, m.activeModel)
-		if err != nil {
-			return StreamErrorMsg{Err: err}
-		}
-
-		for chunk := range stream {
-			m.AppendLastMessage(chunk)
-		}
-
-		return StreamDoneMsg{}
-	}
-}
+func (m *Model) streamResponse(messages []infra.Message) tea.Cmd { return m.startAgentLoop(messages) }
 
 func (m *Model) sendCodeToAI(code string) tea.Cmd {
 	prompt := fmt.Sprintf("请解释以下代码：\n```\n%s\n```", code)
 	m.AddMessage("user", prompt)
 	m.AddMessage("assistant", "")
+	m.MarkLastMessageStreaming(true)
 	m.TrimHistory(m.historyTurns)
 	m.generating = true
-
 	messages := m.buildMessages()
-	return m.streamResponse(messages)
+	return m.startAgentLoop(messages)
 }
 
-// convertSnakeCaseToCamelCase 将snake_case键转换为camelCase
-func convertSnakeCaseToCamelCase(params map[string]interface{}) map[string]interface{} {
-	result := make(map[string]interface{})
-	for key, value := range params {
-		// 将snake_case转换为camelCase
-		parts := strings.Split(key, "_")
-		if len(parts) > 1 {
-			camelKey := parts[0]
-			for i := 1; i < len(parts); i++ {
-				if len(parts[i]) > 0 {
-					camelKey += strings.ToUpper(parts[i][:1]) + parts[i][1:]
-				}
-			}
-			result[camelKey] = value
-		} else {
-			result[key] = value
+func extractToolCall(content string) (domain.ToolCall, bool, error) {
+	candidates := []string{strings.TrimSpace(content)}
+	candidates = append(candidates, extractJSONCodeBlocks(content)...)
+	if obj := extractFirstJSONObject(content); obj != "" {
+		candidates = append(candidates, obj)
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		var call domain.ToolCall
+		if err := json.Unmarshal([]byte(candidate), &call); err != nil {
+			continue
+		}
+		if strings.TrimSpace(call.Tool) == "" {
+			continue
+		}
+		call.Params = servertools.NormalizeParams(call.Params)
+		return call, true, nil
+	}
+	if strings.Contains(content, "\"tool\"") {
+		return domain.ToolCall{}, false, fmt.Errorf("检测到 tool 字段但未能提取合法 JSON")
+	}
+	return domain.ToolCall{}, false, nil
+}
+
+func extractJSONCodeBlocks(content string) []string {
+	parts := strings.Split(content, "```")
+	blocks := make([]string, 0)
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "json") {
+			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "json"))
+		}
+		if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+			blocks = append(blocks, trimmed)
 		}
 	}
-	return result
+	return blocks
+}
+
+func extractFirstJSONObject(content string) string {
+	start := strings.Index(content, "{")
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(content); i++ {
+		ch := content[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		if ch == '"' {
+			inString = true
+			continue
+		}
+		if ch == '{' {
+			depth++
+		}
+		if ch == '}' {
+			depth--
+			if depth == 0 {
+				return content[start : i+1]
+			}
+		}
+	}
+	return ""
 }
 
 func runCodeCmd(code string) tea.Cmd {
@@ -655,18 +629,15 @@ func runCodeCmd(code string) tea.Cmd {
 		if ext == "" {
 			return StreamErrorMsg{Err: fmt.Errorf("无法识别代码语言")}
 		}
-
 		tmpFile, err := os.CreateTemp("", "neocode-*."+ext)
 		if err != nil {
 			return StreamErrorMsg{Err: fmt.Errorf("创建临时文件失败: %w", err)}
 		}
 		defer os.Remove(tmpFile.Name())
-
 		if _, err := tmpFile.WriteString(code); err != nil {
 			return StreamErrorMsg{Err: fmt.Errorf("写入临时文件失败: %w", err)}
 		}
 		tmpFile.Close()
-
 		var cmd *exec.Cmd
 		if runner != "" {
 			cmd = exec.Command(runner, tmpFile.Name())
@@ -676,18 +647,15 @@ func runCodeCmd(code string) tea.Cmd {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Stdin = os.Stdin
-
 		if err := cmd.Run(); err != nil {
 			return StreamErrorMsg{Err: err}
 		}
-
 		return StreamDoneMsg{}
 	}
 }
 
 func detectLanguage(code string) (string, string) {
 	code = strings.TrimSpace(code)
-
 	if strings.HasPrefix(code, "#!/bin/bash") || strings.HasPrefix(code, "#!/bin/sh") {
 		return "sh", "bash"
 	}
@@ -703,7 +671,6 @@ func detectLanguage(code string) (string, string) {
 	if strings.HasPrefix(code, "console.log") || strings.Contains(code, "=>") {
 		return "js", "node"
 	}
-
 	return "", ""
 }
 
@@ -719,7 +686,6 @@ func (m *Model) moveCursorUp() {
 		}
 	}
 }
-
 func (m *Model) moveCursorDown() {
 	lines := strings.Split(m.inputBuffer, "\n")
 	if m.cursorLine < len(lines)-1 {
@@ -730,7 +696,6 @@ func (m *Model) moveCursorDown() {
 		}
 	}
 }
-
 func (m *Model) moveCursorLeft() {
 	if m.cursorLine == 0 && m.cursorCol == 0 {
 		return
@@ -743,7 +708,6 @@ func (m *Model) moveCursorLeft() {
 		m.cursorCol = utf8.RuneCountInString(lines[m.cursorLine])
 	}
 }
-
 func (m *Model) moveCursorRight() {
 	lines := strings.Split(m.inputBuffer, "\n")
 	currentLineLen := utf8.RuneCountInString(lines[m.cursorLine])
@@ -754,91 +718,50 @@ func (m *Model) moveCursorRight() {
 		m.cursorCol = 0
 	}
 }
-
 func (m *Model) insertAtCursor(text string) {
 	lines := strings.Split(m.inputBuffer, "\n")
 	if m.cursorLine >= len(lines) {
-		m.inputBuffer += text
-		m.cursorLine = len(lines) - 1
-		m.cursorCol = utf8.RuneCountInString(lines[m.cursorLine])
-		return
+		lines = append(lines, "")
 	}
-
-	line := lines[m.cursorLine]
-	runes := []rune(line)
-	if m.cursorCol > len(runes) {
-		m.cursorCol = len(runes)
+	lineRunes := []rune(lines[m.cursorLine])
+	if m.cursorCol > len(lineRunes) {
+		m.cursorCol = len(lineRunes)
 	}
-	before := string(runes[:m.cursorCol])
-	after := string(runes[m.cursorCol:])
-	lines[m.cursorLine] = before + text + after
+	newLine := string(lineRunes[:m.cursorCol]) + text + string(lineRunes[m.cursorCol:])
+	lines[m.cursorLine] = newLine
 	m.inputBuffer = strings.Join(lines, "\n")
 	m.cursorCol += utf8.RuneCountInString(text)
 }
-
+func (m *Model) backspaceAtCursor() {
+	lines := strings.Split(m.inputBuffer, "\n")
+	if m.cursorLine >= len(lines) {
+		return
+	}
+	if m.cursorCol > 0 {
+		lineRunes := []rune(lines[m.cursorLine])
+		lines[m.cursorLine] = string(lineRunes[:m.cursorCol-1]) + string(lineRunes[m.cursorCol:])
+		m.cursorCol--
+	} else if m.cursorLine > 0 {
+		prevLen := utf8.RuneCountInString(lines[m.cursorLine-1])
+		lines[m.cursorLine-1] += lines[m.cursorLine]
+		lines = append(lines[:m.cursorLine], lines[m.cursorLine+1:]...)
+		m.cursorLine--
+		m.cursorCol = prevLen
+	}
+	m.inputBuffer = strings.Join(lines, "\n")
+}
 func (m *Model) deleteCharAtCursor() {
 	lines := strings.Split(m.inputBuffer, "\n")
 	if m.cursorLine >= len(lines) {
 		return
 	}
-
-	line := lines[m.cursorLine]
-	runes := []rune(line)
-
-	if m.cursorCol > len(runes) {
-		m.cursorCol = len(runes)
-	}
-
-	if m.cursorCol < len(runes) {
-		runes = append(runes[:m.cursorCol], runes[m.cursorCol+1:]...)
-		lines[m.cursorLine] = string(runes)
-		m.inputBuffer = strings.Join(lines, "\n")
+	lineRunes := []rune(lines[m.cursorLine])
+	if m.cursorCol < len(lineRunes) {
+		lines[m.cursorLine] = string(lineRunes[:m.cursorCol]) + string(lineRunes[m.cursorCol+1:])
 	} else if m.cursorLine < len(lines)-1 {
-		lines[m.cursorLine] = line + lines[m.cursorLine+1]
+		lines[m.cursorLine] += lines[m.cursorLine+1]
 		lines = append(lines[:m.cursorLine+1], lines[m.cursorLine+2:]...)
-		m.inputBuffer = strings.Join(lines, "\n")
 	}
+	m.inputBuffer = strings.Join(lines, "\n")
 }
-
-func (m *Model) backspaceAtCursor() {
-	if m.cursorLine == 0 && m.cursorCol == 0 {
-		return
-	}
-
-	lines := strings.Split(m.inputBuffer, "\n")
-
-	if m.cursorCol > 0 {
-		line := lines[m.cursorLine]
-		runes := []rune(line)
-
-		if m.cursorCol > len(runes) {
-			m.cursorCol = len(runes)
-		}
-
-		if m.cursorCol > 0 {
-			runes = append(runes[:m.cursorCol-1], runes[m.cursorCol:]...)
-			lines[m.cursorLine] = string(runes)
-			m.inputBuffer = strings.Join(lines, "\n")
-			m.cursorCol--
-		}
-	} else if m.cursorLine > 0 {
-		lines = strings.Split(m.inputBuffer, "\n")
-		m.cursorLine--
-		m.cursorCol = utf8.RuneCountInString(lines[m.cursorLine])
-		lines[m.cursorLine] = lines[m.cursorLine] + lines[m.cursorLine+1]
-		lines = append(lines[:m.cursorLine+1], lines[m.cursorLine+2:]...)
-		m.inputBuffer = strings.Join(lines, "\n")
-	}
-}
-
-func (m *Model) enterMultilineMode() {
-	m.multilineMode = true
-	m.cursorLine = 0
-	m.cursorCol = utf8.RuneCountInString(m.inputBuffer)
-}
-
-func (m *Model) exitMultilineMode() {
-	m.multilineMode = false
-	m.cursorLine = 0
-	m.cursorCol = 0
-}
+func (m *Model) enterMultilineMode() { m.multilineMode = true }
