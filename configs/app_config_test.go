@@ -103,7 +103,7 @@ memory:
 history:
   short_term_turns: 6
 persona:
-  file_path: "./persona.txt"
+  file_path: "./configs/persona.txt"
 models:
   chat:
     default_model: "chat-model"
@@ -214,8 +214,44 @@ func validConfig() *AppConfiguration {
 	cfg.Memory.StoragePath = "./data/memory_rules.json"
 	cfg.Memory.PersistTypes = []string{"user_preference", "project_rule", "code_fact", "fix_recipe"}
 	cfg.History.ShortTermTurns = 6
-	cfg.Persona.FilePath = "./persona.txt"
+	cfg.Persona.FilePath = DefaultPersonaFilePath
 	cfg.Models.Chat.DefaultModel = "chat-model"
 	cfg.Models.Chat.Models = []ModelDetail{{Name: "chat-model", URL: "https://chat.example"}}
 	return cfg
+}
+
+func TestDefaultAppConfigUsesCheckedInPersonaPath(t *testing.T) {
+	cfg := DefaultAppConfig()
+	if cfg.Persona.FilePath != DefaultPersonaFilePath {
+		t.Fatalf("expected default persona path %q, got %q", DefaultPersonaFilePath, cfg.Persona.FilePath)
+	}
+}
+
+func TestResolvePersonaFilePathFallsBackToCheckedInFile(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	tmpDir := t.TempDir()
+	configsDir := filepath.Join(tmpDir, "configs")
+	if err := os.MkdirAll(configsDir, 0o755); err != nil {
+		t.Fatalf("mkdir configs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configsDir, "persona.txt"), []byte("persona"), 0o644); err != nil {
+		t.Fatalf("write persona: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir temp dir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(wd)
+	}()
+
+	resolved := ResolvePersonaFilePath("./persona.txt")
+	if resolved != DefaultPersonaFilePath {
+		t.Fatalf("expected legacy persona path to resolve to %q, got %q", DefaultPersonaFilePath, resolved)
+	}
+	if _, err := os.Stat(resolved); err != nil {
+		t.Fatalf("expected resolved persona file to exist: %v", err)
+	}
 }

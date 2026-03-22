@@ -99,7 +99,7 @@ history:
   short_term_turns: 6
 
 persona:
-  file_path: "./persona.txt"
+  file_path: "./configs/persona.txt"
 
 models:
   chat:
@@ -163,7 +163,7 @@ go run ./cmd/server
 - `config.yaml`：主配置文件
 - `config.example.yaml`：配置模板
 - `data/memory_rules.json`：长期结构化记忆文件
-- `persona.txt`：人设内容
+- `configs/persona.txt`：人设内容
 
 ## 安全与本地文件
 

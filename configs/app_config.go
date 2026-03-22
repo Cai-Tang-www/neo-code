@@ -72,7 +72,7 @@ func DefaultAppConfig() *AppConfiguration {
 	cfg.Memory.StoragePath = "./data/memory_rules.json"
 	cfg.Memory.PersistTypes = []string{"user_preference", "project_rule", "code_fact", "fix_recipe"}
 	cfg.History.ShortTermTurns = 6
-	cfg.Persona.FilePath = "./persona.txt"
+	cfg.Persona.FilePath = DefaultPersonaFilePath
 	cfg.Models.Chat.DefaultModel = "Qwen/Qwen3-Coder-480B-A35B-Instruct"
 	cfg.Models.Chat.Models = []ModelDetail{
 		{Name: "Qwen/Qwen3-Coder-480B-A35B-Instruct", URL: "https://api-inference.modelscope.cn/v1/chat/completions"},

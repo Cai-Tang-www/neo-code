@@ -3,11 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
+	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/domain"
 )
 
@@ -83,17 +82,9 @@ func (s *roleServiceImpl) Delete(ctx context.Context, id string) error {
 }
 
 func (s *roleServiceImpl) loadFromFile(path string) (string, error) {
-	if strings.TrimSpace(path) == "" {
+	prompt, _, err := configs.LoadPersonaPrompt(path)
+	if err != nil {
 		return "", nil
 	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-
-	return strings.TrimSpace(string(data)), nil
+	return prompt, nil
 }

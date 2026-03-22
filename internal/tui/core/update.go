@@ -43,91 +43,112 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StreamDoneMsg:
 		m.mu.Lock()
 		m.generating = false
-		m.FinishLastMessage()
+		m.streamChan = nil
 
-		// 检查最后一条AI消息是否为JSON格式的工具调用
-		if !m.toolExecuting && len(m.messages) > 0 {
+		var lastContent string
+		shouldCheckToolCall := !m.toolExecuting && len(m.messages) > 0
+		if len(m.messages) > 0 {
 			lastMsg := &m.messages[len(m.messages)-1]
+			lastMsg.Streaming = false
 			if lastMsg.Role == "assistant" {
-				// 验证是否为JSON
-				var jsonData map[string]interface{}
-				if err := json.Unmarshal([]byte(lastMsg.Content), &jsonData); err == nil {
-					// 检查是否包含工具调用字段
-					if toolName, ok := jsonData["tool"].(string); ok && toolName != "" {
-						m.toolExecuting = true
-						m.mu.Unlock()
-
-						// 显示工具执行中提示
-						if toolParams, ok := jsonData["params"].(map[string]interface{}); ok {
-							if filePath, ok := toolParams["filePath"].(string); ok && toolName == "read" {
-								m.AddMessage("system", fmt.Sprintf("read:正在读取%s文件...", filePath))
-							} else if filePath, ok := toolParams["filePath"].(string); ok && (toolName == "edit" || toolName == "write") {
-								m.AddMessage("system", fmt.Sprintf("%s:正在处理%s文件...", toolName, filePath))
-							} else {
-								m.AddMessage("system", fmt.Sprintf("%s:正在执行工具...", toolName))
-							}
-						}
-
-						// 在goroutine中执行工具调用
-						return m, func() tea.Msg {
-							// 创建工具实例并执行
-							var tool tools.Tool
-							switch toolName {
-							case "read":
-								tool = &tools.ReadTool{}
-							case "write":
-								tool = &tools.WriteTool{}
-							case "edit":
-								tool = &tools.EditTool{}
-							case "bash":
-								tool = &tools.BashTool{}
-							case "list":
-								tool = &tools.ListTool{}
-							case "grep":
-								tool = &tools.GrepTool{}
-							default:
-								m.mu.Lock()
-								m.toolExecuting = false
-								m.mu.Unlock()
-								return ToolErrorMsg{Err: fmt.Errorf("不支持的工具: %s", toolName)}
-							}
-
-							// 安全地获取并转换参数
-							var paramsMap map[string]interface{}
-							if paramsRaw, ok := jsonData["params"]; ok {
-								if paramsCasted, ok := paramsRaw.(map[string]interface{}); ok {
-									paramsMap = convertSnakeCaseToCamelCase(paramsCasted)
-								} else {
-									m.mu.Lock()
-									m.toolExecuting = false
-									m.mu.Unlock()
-									return ToolErrorMsg{Err: fmt.Errorf("工具参数格式错误")}
-								}
-							} else {
-								paramsMap = make(map[string]interface{})
-							}
-
-							// 执行工具
-							result := tool.Run(paramsMap)
-
-							// 将结果作为系统消息返回
-							if result.Success {
-								return ToolResultMsg{Result: result}
-							} else {
-								return ToolErrorMsg{Err: fmt.Errorf("%s", result.Error)}
-							}
-						}
-					}
-				}
+				lastContent = lastMsg.Content
+			} else {
+				shouldCheckToolCall = false
 			}
 		}
 		m.mu.Unlock()
 
+		// 检查最后一条AI消息是否为JSON格式的工具调用
+		if shouldCheckToolCall {
+			var jsonData map[string]interface{}
+			if err := json.Unmarshal([]byte(lastContent), &jsonData); err == nil {
+				if toolName, ok := jsonData["tool"].(string); ok && toolName != "" {
+					m.mu.Lock()
+					if m.toolExecuting {
+						m.mu.Unlock()
+						return m, nil
+					}
+					m.toolExecuting = true
+					m.mu.Unlock()
+
+					// 显示工具执行中提示
+					if toolParams, ok := jsonData["params"].(map[string]interface{}); ok {
+						if filePath, ok := toolParams["filePath"].(string); ok && toolName == "read" {
+							m.AddMessage("system", fmt.Sprintf("read:正在读取%s文件...", filePath))
+						} else if filePath, ok := toolParams["filePath"].(string); ok && (toolName == "edit" || toolName == "write") {
+							m.AddMessage("system", fmt.Sprintf("%s:正在处理%s文件...", toolName, filePath))
+						} else {
+							m.AddMessage("system", fmt.Sprintf("%s:正在执行工具...", toolName))
+						}
+					}
+
+					// 在goroutine中执行工具调用
+					return m, func() tea.Msg {
+						var tool tools.Tool
+						switch toolName {
+						case "read":
+							tool = &tools.ReadTool{}
+						case "write":
+							tool = &tools.WriteTool{}
+						case "edit":
+							tool = &tools.EditTool{}
+						case "bash":
+							tool = &tools.BashTool{}
+						case "list":
+							tool = &tools.ListTool{}
+						case "grep":
+							tool = &tools.GrepTool{}
+						default:
+							m.mu.Lock()
+							m.toolExecuting = false
+							m.mu.Unlock()
+							return ToolErrorMsg{Err: fmt.Errorf("不支持的工具: %s", toolName)}
+						}
+
+						var paramsMap map[string]interface{}
+						if paramsRaw, ok := jsonData["params"]; ok {
+							if paramsCasted, ok := paramsRaw.(map[string]interface{}); ok {
+								paramsMap = convertSnakeCaseToCamelCase(paramsCasted)
+							} else {
+								m.mu.Lock()
+								m.toolExecuting = false
+								m.mu.Unlock()
+								return ToolErrorMsg{Err: fmt.Errorf("工具参数格式错误")}
+							}
+						} else {
+							paramsMap = make(map[string]interface{})
+						}
+
+						result := tool.Run(paramsMap)
+
+						if result.Success {
+							return ToolResultMsg{Result: result}
+						}
+						return ToolErrorMsg{Err: fmt.Errorf("%s", result.Error)}
+					}
+				}
+			}
+		}
+
 		return m, nil
 
 	case StreamErrorMsg:
+		m.mu.Lock()
 		m.generating = false
-		m.AddMessage("assistant", fmt.Sprintf("错误: %v", msg.Err))
+		m.streamChan = nil
+		replacedPlaceholder := false
+		if len(m.messages) > 0 {
+			lastMsg := &m.messages[len(m.messages)-1]
+			if lastMsg.Role == "assistant" && strings.TrimSpace(lastMsg.Content) == "" {
+				lastMsg.Content = fmt.Sprintf("错误: %v", msg.Err)
+				lastMsg.Streaming = false
+				replacedPlaceholder = true
+			}
+		}
+		m.mu.Unlock()
+		if !replacedPlaceholder {
+			m.AddMessage("assistant", fmt.Sprintf("错误: %v", msg.Err))
+		}
 		m.TrimHistory(m.historyTurns)
 		return m, nil
 
@@ -572,12 +593,6 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			return *m, nil
 		}
 		m.messages = nil
-		if m.persona != "" {
-			m.messages = append(m.messages, Message{
-				Role:    "system",
-				Content: m.persona,
-			})
-		}
 		stats, _ := m.client.GetMemoryStats(context.Background())
 		if stats != nil {
 			m.memoryStats = *stats
@@ -651,6 +666,9 @@ func (m *Model) buildMessages() []infra.Message {
 	result := make([]infra.Message, 0, len(m.messages))
 
 	for _, msg := range m.messages {
+		if msg.Role == "assistant" && strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
 		if msg.Role == "system" {
 			result = append(result, infra.Message{
 				Role:    msg.Role,
@@ -660,6 +678,9 @@ func (m *Model) buildMessages() []infra.Message {
 	}
 
 	for _, msg := range m.messages {
+		if msg.Role == "assistant" && strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
 		if msg.Role != "system" {
 			result = append(result, infra.Message{
 				Role:    msg.Role,

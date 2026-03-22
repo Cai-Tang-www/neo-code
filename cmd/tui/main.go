@@ -38,7 +38,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	persona := loadPersonaPrompt(configs.GlobalAppConfig.Persona.FilePath)
+	persona, personaPath, err := configs.LoadPersonaPrompt(configs.GlobalAppConfig.Persona.FilePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "警告: 人设加载失败: %v\n", err)
+	} else if personaPath != "" && strings.TrimSpace(configs.GlobalAppConfig.Persona.FilePath) != personaPath {
+		fmt.Fprintf(os.Stderr, "提示: 人设已从 %s 回退加载\n", personaPath)
+	}
 	historyTurns := configs.GlobalAppConfig.History.ShortTermTurns
 
 	client, err := infra.NewLocalChatClient()
@@ -312,19 +317,6 @@ func loadDotEnv(path string) error {
 	}
 
 	return nil
-}
-
-func loadPersonaPrompt(path string) string {
-	if strings.TrimSpace(path) == "" {
-		return ""
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-
-	return strings.TrimSpace(string(data))
 }
 
 func setUTF8Mode() {

@@ -24,7 +24,7 @@ history:
   short_term_turns: 6
 
 persona:
-  file_path: "./persona.txt"
+  file_path: "./configs/persona.txt"
 
 models:
   chat:
