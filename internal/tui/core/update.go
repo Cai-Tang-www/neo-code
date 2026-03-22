@@ -18,6 +18,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+const maxToolSteps = 8
+
 // Update 处理 Bubble Tea 事件并驱动聊天状态更新。
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -493,6 +495,17 @@ func formatTypeStats(byType map[string]int) string {
 		return "无"
 	}
 	return strings.Join(parts, ", ")
+}
+
+func formatToolProgress(call domain.ToolCall) string {
+	params := servertools.NormalizeParams(call.Params)
+	if filePath, ok := params["filePath"].(string); ok && filePath != "" {
+		return fmt.Sprintf("%s: 正在处理 %s", call.Tool, filePath)
+	}
+	if workdir, ok := params["workdir"].(string); ok && workdir != "" {
+		return fmt.Sprintf("%s: 在 %s 中执行工具", call.Tool, workdir)
+	}
+	return fmt.Sprintf("%s: 正在执行工具...", call.Tool)
 }
 
 func (m *Model) buildMessages() []infra.Message {
