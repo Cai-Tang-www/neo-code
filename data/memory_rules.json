@@ -76,5 +76,21 @@
     "text": "队规排序\n我理解你想要的是**堆排序（Heap Sort）**。以下是递归实现的堆排序：\n\n## 堆排序（Heap Sort）\n\n```python\ndef heap_sort(arr):\n    \"\"\"\n    堆排序 - 递归实现\n    时间复杂度: O(n log n)\n    空间复杂度: O(log n) - 递归调用栈\n    \"\"\"\n    n = len(arr)\n    \n    # 1. 构建最大堆（从最后一个非叶子节点开始）\n    for i in range(n // 2 - 1, -1, -1):\n        heapify(arr, n, i)\n    \n    # 2. 逐个提取元素\n    for i in range(n - 1, 0, -1):\n        # 将当前最大元素（根）移到末尾\n        arr[0], arr[i] = arr[i], arr[0]\n        # 重新调整堆\n        heapify(arr, i, 0)\n    \n    return arr\n\ndef heapify(arr, n, i):\n    \"\"\"\n    调整堆结构，使其满足最大堆性质\n    \"\"\"\n    largest = i      # 初始化最大值为根节点\n    left = 2 * i + 1    # 左子节点\n    right = 2 * i + 2   # 右子节点\n    \n    # 如果左子节点存在且大于根节点\n    if left \u003c n and arr[left] \u003e arr[largest]:\n        largest = left\n    \n    # 如果右子节点存在且大于当前最大值\n    if right \u003c n and arr[right] \u003e arr[largest]:\n        largest = right\n    \n    # 如果最大值不是根节点，则交换并继续调整\n    if largest != i:\n        arr[i], arr[largest] = arr[largest], arr[i]\n        # 递归调整受影响的子树\n        heapify(arr, n, largest)\n\n# 使用示例\nif __name__ == \"__main__\":\n    test_array = [64, 34, 25, 12, 22, 11, 90]\n    print(f\"原数组: {test_array}\")\n    \n    sorted_array = heap_sort(test_array.copy())\n    print(f\"排序后: {sorted_array}\")\n```\n\n## 算法步骤说明：\n\n1. **构建最大堆**：从最后一个非叶子节点开始，自底向上调整堆结构\n2. **排序过程**：\n   - 将堆顶（最大值）与末尾元素交换\n   - 减少堆的大小\n   - 重新调整堆结构\n   - 重复直到堆大小为1\n\n## 特点：\n- **时间复杂度稳定**：O(n log n)\n- **原地排序**：不需要额外存储空间\n- **不稳定排序**：相等元素的相对位置可能改变\n\n这个实现是递归的，因为 `heapify` 函数会递归调用自身来维护堆的性质。",
     "created_at": "2026-03-21T02:24:39.6652101Z",
     "updated_at": "2026-03-21T02:24:39.6652101Z"
+  },
+  {
+    "id": "1774185079574803700-code_fact",
+    "type": "code_fact",
+    "summary": "你好！我是 NeoCode，你的 AI 编程助手。",
+    "details": "你好！我是 NeoCode，你的 AI 编程助手。\n\n我注意到你最近在处理 `/home/project/main.py` 文件。需要我帮你做什么吗？比如：\n\n- 查看或修改代码\n- 排查 Bug\n- 添加新功能\n- \ufffd\ufffd...",
+    "scope": "project",
+    "tags": [
+      "bugfix"
+    ],
+    "source": "conversation",
+    "confidence": 0.82,
+    "user_input": "你好！我是 NeoCode，你的 AI 编程助手。",
+    "text": "你好\n你好！我是 NeoCode，你的 AI 编程助手。\n\n我注意到你最近在处理 `/home/project/main.py` 文件。需要我帮你做什么吗？比如：\n\n- 查看或修改代码\n- 排查 Bug\n- 添加新功能\n- 解释代码逻辑\n- 其他编程问题\n\n请告诉我你的需求。",
+    "created_at": "2026-03-22T13:11:19.5748037Z",
+    "updated_at": "2026-03-22T13:11:19.5748037Z"
   }
 ]
