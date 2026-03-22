@@ -2,7 +2,6 @@ package core
 
 import (
 	"github.com/charmbracelet/bubbletea"
-	"go-llm-demo/internal/server/infra/tools"
 )
 
 type Msg interface{ isMsg() }
@@ -35,7 +34,9 @@ type (
 		Content string
 	}
 
-	StreamDoneMsg struct{}
+	StreamDoneMsg struct {
+		Content string
+	}
 
 	StreamErrorMsg struct {
 		Err error
@@ -61,16 +62,6 @@ type (
 	ExitMsg struct{}
 
 	RefreshMemoryMsg struct{}
-
-	// 工具执行结果消息
-	ToolResultMsg struct {
-		Result *tools.ToolResult
-	}
-
-	// 工具执行错误消息
-	ToolErrorMsg struct {
-		Err error
-	}
 )
 
 func (InitMsg) isMsg()          {}

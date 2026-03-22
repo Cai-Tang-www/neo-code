@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"go-llm-demo/internal/server/domain"
-	"go-llm-demo/internal/server/infra/tools"
 	"go-llm-demo/internal/tui/infra"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,78 +35,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case StreamDoneMsg:
+		if msg.Content != "" && m.generating {
+			m.AppendLastMessage(msg.Content)
+		}
 		m.generating = false
 		m.FinishLastMessage()
-
-		// 检查最后一条AI消息是否为JSON格式的工具调用
-		if len(m.messages) > 0 {
-			lastMsg := &m.messages[len(m.messages)-1]
-			if lastMsg.Role == "assistant" {
-				// 验证是否为JSON
-				var jsonData map[string]interface{}
-				if err := json.Unmarshal([]byte(lastMsg.Content), &jsonData); err == nil {
-					// 检查是否包含工具调用字段
-					if toolName, ok := jsonData["tool"].(string); ok && toolName != "" {
-						// 显示工具执行中提示
-						if toolParams, ok := jsonData["params"].(map[string]interface{}); ok {
-							if filePath, ok := toolParams["filePath"].(string); ok && toolName == "read" {
-								m.AddMessage("system", fmt.Sprintf("read:正在读取%s文件...", filePath))
-							} else if filePath, ok := toolParams["filePath"].(string); ok && (toolName == "edit" || toolName == "write") {
-								m.AddMessage("system", fmt.Sprintf("%s:正在处理%s文件...", toolName, filePath))
-							} else {
-								m.AddMessage("system", fmt.Sprintf("%s:正在执行工具...", toolName))
-							}
-						}
-
-						// 在goroutine中执行工具调用
-						return m, func() tea.Msg {
-							// 创建工具实例并执行
-							var tool tools.Tool
-							switch toolName {
-							case "read":
-								tool = &tools.ReadTool{}
-							case "write":
-								tool = &tools.WriteTool{}
-							case "edit":
-								tool = &tools.EditTool{}
-							case "bash":
-								tool = &tools.BashTool{}
-							case "list":
-								tool = &tools.ListTool{}
-							case "grep":
-								tool = &tools.GrepTool{}
-							default:
-								return ToolErrorMsg{Err: fmt.Errorf("不支持的工具: %s", toolName)}
-							}
-
-							// 安全地获取并转换参数
-							var paramsMap map[string]interface{}
-							if paramsRaw, ok := jsonData["params"]; ok {
-								if paramsCasted, ok := paramsRaw.(map[string]interface{}); ok {
-									// 转换参数键从snake_case到camelCase以兼容AI生成的参数
-									paramsMap = convertSnakeCaseToCamelCase(paramsCasted)
-								} else {
-									return ToolErrorMsg{Err: fmt.Errorf("工具参数格式错误")}
-								}
-							} else {
-								paramsMap = make(map[string]interface{})
-							}
-
-							// 执行工具
-							result := tool.Run(paramsMap)
-
-							// 将结果作为系统消息返回
-							if result.Success {
-								return ToolResultMsg{Result: result}
-							} else {
-								return ToolErrorMsg{Err: fmt.Errorf("%s", result.Error)}
-							}
-						}
-					}
-				}
-			}
-		}
-
 		return m, nil
 
 	case StreamErrorMsg:
@@ -135,25 +66,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ExitMsg:
 		return m, tea.Quit
 
-	case ToolResultMsg:
-		// 将工具执行结果添加为系统消息，然后重新获取AI响应
-		m.AddMessage("system", fmt.Sprintf("工具执行结果: %s", msg.Result.Output))
-		m.AddMessage("assistant", "")
-		m.generating = true
-
-		// 构建包含工具结果的消息并重新请求AI
-		messages := m.buildMessages()
-		return m, m.streamResponse(messages)
-
-	case ToolErrorMsg:
-		// 将工具执行错误添加为系统消息
-		m.AddMessage("system", fmt.Sprintf("工具执行错误: %v", msg.Err))
-		m.AddMessage("assistant", "")
-		m.generating = true
-
-		// 构建包含错误信息的消息并重新请求AI
-		messages := m.buildMessages()
-		return m, m.streamResponse(messages)
 	}
 
 	return m, cmd
@@ -562,11 +474,11 @@ func (m *Model) streamResponse(messages []infra.Message) tea.Cmd {
 			return StreamErrorMsg{Err: err}
 		}
 
+		var content strings.Builder
 		for chunk := range stream {
-			m.AppendLastMessage(chunk)
+			content.WriteString(chunk)
 		}
-
-		return StreamDoneMsg{}
+		return StreamDoneMsg{Content: content.String()}
 	}
 }
 
@@ -623,27 +535,6 @@ func getDelimiter(s string) string {
 		return s[:3]
 	}
 	return s
-}
-
-// convertSnakeCaseToCamelCase 将snake_case键转换为camelCase
-func convertSnakeCaseToCamelCase(params map[string]interface{}) map[string]interface{} {
-	result := make(map[string]interface{})
-	for key, value := range params {
-		// 将snake_case转换为camelCase
-		parts := strings.Split(key, "_")
-		if len(parts) > 1 {
-			camelKey := parts[0]
-			for i := 1; i < len(parts); i++ {
-				if len(parts[i]) > 0 {
-					camelKey += strings.ToUpper(parts[i][:1]) + parts[i][1:]
-				}
-			}
-			result[camelKey] = value
-		} else {
-			result[key] = value
-		}
-	}
-	return result
 }
 
 func runCodeCmd(code string) tea.Cmd {

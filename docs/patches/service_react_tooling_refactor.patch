@@ -1,0 +1,1966 @@
+diff --git a/internal/server/infra/tools/bash.go b/internal/server/infra/tools/bash.go
+index 60de971..c778354 100644
+--- a/internal/server/infra/tools/bash.go
++++ b/internal/server/infra/tools/bash.go
+@@ -8,47 +8,39 @@ import (
+ 	"time"
+ )
+ 
+-// BashTool 执行shell命令。
++// BashTool 执行 shell 命令。
+ type BashTool struct{}
+ 
+-// Name 返回工具名称。
+-func (b *BashTool) Name() string {
+-	return "bash"
+-}
++func (b *BashTool) Name() string { return "bash" }
+ 
+-// Description 返回工具描述。
+ func (b *BashTool) Description() string {
+ 	return "在持久的shell会话中执行给定的bash命令，支持可选超时。"
+ }
+ 
+-// Run 执行bash工具，使用给定的参数。
+-// 期望的参数：
+-//   - command: 要执行的命令（必需）
+-//   - timeout: 可选的超时时间（毫秒，默认：120000 / 2分钟）
+-//   - workdir: 运行命令的工作目录（可选，默认：当前目录）
+-//   - description: 明确描述命令做什么的说明（建议用于日志）
++func (b *BashTool) Schema() ToolSchema {
++	return ToolSchema{
++		Name:        b.Name(),
++		Description: b.Description(),
++		Parameters: []ToolParameter{
++			{Name: "command", Type: "string", Required: true, Description: "要执行的 bash 命令"},
++			{Name: "timeout", Type: "number", Description: "超时时间，毫秒"},
++			{Name: "workdir", Type: "string", Description: "执行命令的工作目录"},
++			{Name: "description", Type: "string", Description: "命令意图说明"},
++		},
++	}
++}
++
+ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
+-	// 验证必需参数
+ 	commandParam, ok := params["command"]
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: b.Name(),
+-			Success:  false,
+-			Error:    "缺少必需参数: command",
+-		}
++		return &ToolResult{ToolName: b.Name(), Success: false, Error: "缺少必需参数: command"}
+ 	}
+-
+ 	command, ok := commandParam.(string)
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: b.Name(),
+-			Success:  false,
+-			Error:    "command 必须是字符串",
+-		}
++		return &ToolResult{ToolName: b.Name(), Success: false, Error: "command 必须是字符串"}
+ 	}
+ 
+-	// 解析可选的timeout参数
+-	timeoutMs := 120000 // 默认2分钟
++	timeoutMs := 120000
+ 	if timeoutParam, ok := params["timeout"]; ok {
+ 		switch v := timeoutParam.(type) {
+ 		case float64:
+@@ -56,54 +48,35 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
+ 		case int:
+ 			timeoutMs = v
+ 		case string:
+-			if parsed, err := parseInt(v); err == nil {
+-				timeoutMs = parsed
+-			} else {
+-				return &ToolResult{
+-					ToolName: b.Name(),
+-					Success:  false,
+-					Error:    "timeout 必须是数字",
+-				}
++			parsed, err := parseInt(v)
++			if err != nil {
++				return &ToolResult{ToolName: b.Name(), Success: false, Error: "timeout 必须是数字"}
+ 			}
++			timeoutMs = parsed
+ 		default:
+-			return &ToolResult{
+-				ToolName: b.Name(),
+-				Success:  false,
+-				Error:    "timeout 必须是数字",
+-			}
++			return &ToolResult{ToolName: b.Name(), Success: false, Error: "timeout 必须是数字"}
+ 		}
+ 	}
+ 
+-	// 解析可选的workdir参数
+-	workdir := "." // 默认为当前目录
++	workdir := "."
+ 	if workdirParam, ok := params["workdir"]; ok {
+ 		workdir, ok = workdirParam.(string)
+ 		if !ok {
+-			return &ToolResult{
+-				ToolName: b.Name(),
+-				Success:  false,
+-				Error:    "workdir 必须是字符串",
+-			}
++			return &ToolResult{ToolName: b.Name(), Success: false, Error: "workdir 必须是字符串"}
+ 		}
+ 	}
+-	// 描述参数是可选的，但在执行时不使用描述
+ 
+-	// 创建带有超时的上下文
+ 	ctx, cancel := getContextWithTimeout(timeoutMs)
+ 	defer cancel()
+ 
+ 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+ 	cmd.Dir = workdir
+ 
+-	// 捕获输出
+ 	var stdoutBuf, stderrBuf bytes.Buffer
+ 	cmd.Stdout = &stdoutBuf
+ 	cmd.Stderr = &stderrBuf
+ 
+-	// 执行命令
+ 	err := cmd.Run()
+-
+-	// 准备结果
+ 	result := &ToolResult{
+ 		ToolName: b.Name(),
+ 		Metadata: map[string]interface{}{
+@@ -114,7 +87,6 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
+ 	}
+ 
+ 	if err != nil {
+-		// 检查是否是超时错误
+ 		if ctx.Err() != nil {
+ 			result.Success = false
+ 			result.Error = fmt.Sprintf("命令在 %dms 后超时", timeoutMs)
+@@ -125,26 +97,23 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
+ 				result.Error += fmt.Sprintf(": %s", stderrBuf.String())
+ 			}
+ 		}
+-	} else {
+-		result.Success = true
+-		result.Output = stdoutBuf.String()
+-		if stderrBuf.Len() > 0 {
+-			// 将stderr包含在输出中，但标记为成功
+-			result.Output += fmt.Sprintf("\nSTDERR: %s", stderrBuf.String())
+-		}
++		return result
+ 	}
+ 
++	result.Success = true
++	result.Output = stdoutBuf.String()
++	if stderrBuf.Len() > 0 {
++		result.Output += fmt.Sprintf("\nSTDERR: %s", stderrBuf.String())
++	}
+ 	return result
+ }
+ 
+-// parseInt 将字符串解析为整数的辅助函数
+ func parseInt(s string) (int, error) {
+ 	var result int
+ 	_, err := fmt.Sscanf(s, "%d", &result)
+ 	return result, err
+ }
+ 
+-// getContextWithTimeout 带超时的上下文创建辅助函数
+ func getContextWithTimeout(timeoutMs int) (context.Context, context.CancelFunc) {
+ 	return context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+ }
+diff --git a/internal/server/infra/tools/edit.go b/internal/server/infra/tools/edit.go
+index ea7e048..3edb5b8 100644
+--- a/internal/server/infra/tools/edit.go
++++ b/internal/server/infra/tools/edit.go
+@@ -9,87 +9,41 @@ import (
+ // EditTool 在文件中执行精确的字符串替换。
+ type EditTool struct{}
+ 
+-// Name 返回工具名称。
+-func (e *EditTool) Name() string {
+-	return "edit"
+-}
+-
+-// Description 返回工具描述。
++func (e *EditTool) Name() string { return "edit" }
+ func (e *EditTool) Description() string {
+ 	return "在文件中执行精确的字符串替换。工具会自动读取文件内容，执行替换操作，并写回文件。"
+ }
+-
+-// Run 执行编辑工具，使用给定的参数。
+-// 期望的参数：
+-//   - filePath: 要修改的文件的绝对路径（必需）
+-//   - oldString: 要替换的文本（必需）
+-//   - newString: 替换后的文本（必须不同于oldString，必需）
+-//   - replaceAll: 是否替换所有匹配项（可选，默认：false）
++func (e *EditTool) Schema() ToolSchema {
++	return ToolSchema{Name: e.Name(), Description: e.Description(), Parameters: []ToolParameter{{Name: "filePath", Type: "string", Required: true, Description: "要修改的文件路径"}, {Name: "oldString", Type: "string", Required: true, Description: "要替换的旧文本"}, {Name: "newString", Type: "string", Required: true, Description: "替换后的新文本"}, {Name: "replaceAll", Type: "boolean", Description: "是否替换全部匹配项"}}}
++}
+ func (e *EditTool) Run(params map[string]interface{}) *ToolResult {
+-	// 验证必需参数
+ 	filePathParam, ok := params["filePath"]
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    "缺少必需参数: filePath",
+-		}
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: "缺少必需参数: filePath"}
+ 	}
+-
+ 	filePath, ok := filePathParam.(string)
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    "filePath 必须是字符串",
+-		}
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: "filePath 必须是字符串"}
+ 	}
+-
+ 	oldStringParam, ok := params["oldString"]
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    "缺少必需参数: oldString",
+-		}
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: "缺少必需参数: oldString"}
+ 	}
+-
+ 	oldString, ok := oldStringParam.(string)
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    "oldString 必须是字符串",
+-		}
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: "oldString 必须是字符串"}
+ 	}
+-
+ 	newStringParam, ok := params["newString"]
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    "缺少必需参数: newString",
+-		}
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: "缺少必需参数: newString"}
+ 	}
+-
+ 	newString, ok := newStringParam.(string)
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    "newString 必须是字符串",
+-		}
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: "newString 必须是字符串"}
+ 	}
+-
+ 	if oldString == newString {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    "newString 必须不同于 oldString",
+-		}
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: "newString 必须不同于 oldString"}
+ 	}
+-
+-	// 解析可选的replaceAll参数
+ 	replaceAll := false
+ 	if replaceAllParam, ok := params["replaceAll"]; ok {
+ 		switch v := replaceAllParam.(type) {
+@@ -101,85 +55,28 @@ func (e *EditTool) Run(params map[string]interface{}) *ToolResult {
+ 			} else if v == "false" || v == "0" {
+ 				replaceAll = false
+ 			} else {
+-				return &ToolResult{
+-					ToolName: e.Name(),
+-					Success:  false,
+-					Error:    "replaceAll 必须是布尔值",
+-				}
++				return &ToolResult{ToolName: e.Name(), Success: false, Error: "replaceAll 必须是布尔值"}
+ 			}
+ 		default:
+-			return &ToolResult{
+-				ToolName: e.Name(),
+-				Success:  false,
+-				Error:    "replaceAll 必须是布尔值",
+-			}
++			return &ToolResult{ToolName: e.Name(), Success: false, Error: "replaceAll 必须是布尔值"}
+ 		}
+ 	}
+-
+-	// 读取文件内容
+ 	content, err := os.ReadFile(filePath)
+ 	if err != nil {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("读取文件失败: %v", err),
+-		}
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: fmt.Sprintf("读取文件失败: %v", err)}
+ 	}
+-
+-	// 转换为字符串
+ 	fileContent := string(content)
+-
+-	// 检查oldString是否存在于文件中
+ 	if !strings.Contains(fileContent, oldString) {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("未在文件中找到要替换的字符串: %q", oldString),
+-		}
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: fmt.Sprintf("未在文件中找到要替换的字符串: %q", oldString)}
+ 	}
+-
+-	// 执行替换操作
+-	var newContent string
++	newContent := strings.Replace(fileContent, oldString, newString, 1)
++	count := 1
+ 	if replaceAll {
+ 		newContent = strings.ReplaceAll(fileContent, oldString, newString)
+-	} else {
+-		newContent = strings.Replace(fileContent, oldString, newString, 1) // 只替换第一个匹配项
+-	}
+-
+-	// 写回文件
+-	err = os.WriteFile(filePath, []byte(newContent), 0644)
+-	if err != nil {
+-		return &ToolResult{
+-			ToolName: e.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("写入文件失败: %v", err),
+-		}
+-	}
+-
+-	// 计算替换了多少次
+-	var count int
+-	if replaceAll {
+ 		count = strings.Count(fileContent, oldString)
+-	} else {
+-		// 只替换第一个匹配项
+-		if strings.Contains(fileContent, oldString) {
+-			count = 1
+-		} else {
+-			count = 0
+-		}
+ 	}
+-
+-	return &ToolResult{
+-		ToolName: e.Name(),
+-		Success:  true,
+-		Output:   fmt.Sprintf("成功替换 %d 处匹配项", count),
+-		Metadata: map[string]interface{}{
+-			"filePath":     filePath,
+-			"oldString":    oldString,
+-			"newString":    newString,
+-			"replaceAll":   replaceAll,
+-			"replacements": count,
+-			"bytesWritten": len(newContent),
+-		},
++	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
++		return &ToolResult{ToolName: e.Name(), Success: false, Error: fmt.Sprintf("写入文件失败: %v", err)}
+ 	}
++	return &ToolResult{ToolName: e.Name(), Success: true, Output: fmt.Sprintf("成功替换 %d 处匹配项", count), Metadata: map[string]interface{}{"filePath": filePath, "oldString": oldString, "newString": newString, "replaceAll": replaceAll, "replacements": count, "bytesWritten": len(newContent)}}
+ }
+diff --git a/internal/server/infra/tools/grep.go b/internal/server/infra/tools/grep.go
+index 0dc2f4b..3a1c91c 100644
+--- a/internal/server/infra/tools/grep.go
++++ b/internal/server/infra/tools/grep.go
+@@ -5,97 +5,73 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"regexp"
++	"strings"
+ )
+ 
+ // GrepTool 使用正则表达式搜索文件内容。
+ type GrepTool struct{}
+ 
+-// Name 返回工具名称。
+-func (g *GrepTool) Name() string {
+-	return "grep"
+-}
++func (g *GrepTool) Name() string { return "grep" }
+ 
+-// Description 返回工具描述。
+ func (g *GrepTool) Description() string {
+ 	return "使用正则表达式搜索文件内容。返回至少有一个匹配项的文件路径和行号。"
+ }
+ 
+-// Run 执行grep工具，使用给定的参数。
+-// 期望的参数：
+-//   - pattern: 要在文件内容中搜索的正则表达式模式（必需）
+-//   - path: 要搜索的目录（可选，默认：当前工作目录）
+-//   - include: 要包含在搜索中的文件模式（例如："*.js"，"*.{ts,tsx}"）（可选）
++func (g *GrepTool) Schema() ToolSchema {
++	return ToolSchema{
++		Name:        g.Name(),
++		Description: g.Description(),
++		Parameters: []ToolParameter{
++			{Name: "pattern", Type: "string", Required: true, Description: "要搜索的正则模式"},
++			{Name: "path", Type: "string", Description: "搜索目录"},
++			{Name: "include", Type: "string", Description: "文件名 glob 过滤"},
++		},
++	}
++}
++
+ func (g *GrepTool) Run(params map[string]interface{}) *ToolResult {
+-	// 验证必需参数
+ 	patternParam, ok := params["pattern"]
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: g.Name(),
+-			Success:  false,
+-			Error:    "缺少必需参数: pattern",
+-		}
++		return &ToolResult{ToolName: g.Name(), Success: false, Error: "缺少必需参数: pattern"}
+ 	}
+-
+ 	pattern, ok := patternParam.(string)
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: g.Name(),
+-			Success:  false,
+-			Error:    "pattern 必须是字符串",
+-		}
++		return &ToolResult{ToolName: g.Name(), Success: false, Error: "pattern 必须是字符串"}
+ 	}
+ 
+-	// 编译正则表达式模式
+ 	regex, err := regexp.Compile(pattern)
+ 	if err != nil {
+-		return &ToolResult{
+-			ToolName: g.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("无效的正则表达式模式: %v", err),
+-		}
++		return &ToolResult{ToolName: g.Name(), Success: false, Error: fmt.Sprintf("无效的正则表达式模式: %v", err)}
+ 	}
+ 
+-	// 解析可选的path参数
+-	searchPath := "." // 默认为当前目录
++	searchPath := "."
+ 	if pathParam, ok := params["path"]; ok {
+-		searchPath, ok = pathParam.(string)
+-		if !ok {
+-			return &ToolResult{
+-				ToolName: g.Name(),
+-				Success:  false,
+-				Error:    "path 必须是字符串",
+-			}
++		var ok2 bool
++		searchPath, ok2 = pathParam.(string)
++		if !ok2 {
++			return &ToolResult{ToolName: g.Name(), Success: false, Error: "path 必须是字符串"}
+ 		}
+ 	}
+ 
+-	// 解析可选的include参数
+ 	var includePattern string
+ 	if includeParam, ok := params["include"]; ok {
+-		includePattern, ok = includeParam.(string)
+-		if !ok {
+-			return &ToolResult{
+-				ToolName: g.Name(),
+-				Success:  false,
+-				Error:    "include 必须是字符串",
+-			}
++		var ok2 bool
++		includePattern, ok2 = includeParam.(string)
++		if !ok2 {
++			return &ToolResult{ToolName: g.Name(), Success: false, Error: "include 必须是字符串"}
+ 		}
+ 	}
+ 
+-	// 遍历文件系统
+-	var results string
++	var results strings.Builder
+ 	var walkErr error
+ 	err = filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
+ 		if err != nil {
+ 			walkErr = err
+ 			return filepath.SkipDir
+ 		}
+-
+-		// 跳过目录
+ 		if info.IsDir() {
+ 			return nil
+ 		}
+-
+-		// 检查文件是否匹配include模式（使用filepath.Match进行glob模式匹配）
+ 		if includePattern != "" {
+ 			matched, err := filepath.Match(includePattern, filepath.Base(path))
+ 			if err != nil {
+@@ -106,82 +82,36 @@ func (g *GrepTool) Run(params map[string]interface{}) *ToolResult {
+ 				return nil
+ 			}
+ 		}
+-
+-		// 读取文件内容
+ 		content, err := os.ReadFile(path)
+ 		if err != nil {
+-			// 跳过我们无法读取的文件
+ 			return nil
+ 		}
+-
+-		// 搜索匹配项
+ 		matches := regex.FindAllIndex(content, -1)
+ 		if len(matches) == 0 {
+ 			return nil
+ 		}
+-
+-		// 格式化结果，包含行号
+-		lines := regexp.MustCompile("\r?\n").Split(string(content), -1)
+-		lineCount := 0
+-		var lineNum int
+-		foundInFile := false
+-
++		lines := regexp.MustCompile("\\r?\\n").Split(string(content), -1)
++		lineCount, lineNum := 0, 0
+ 		for i, line := range lines {
+-			lineCount += len(line) + 1     // +1 for newline
+-			if lineCount > matches[0][0] { // 我们已经超过了第一个匹配位置
++			lineCount += len(line) + 1
++			if lineCount > matches[0][0] {
+ 				lineNum = i + 1
+-				foundInFile = true
+ 				break
+ 			}
+ 		}
+-
+-		if foundInFile {
+-			results += fmt.Sprintf("%s:%d\n", path, lineNum)
++		if lineNum > 0 {
++			results.WriteString(fmt.Sprintf("%s:%d\n", path, lineNum))
+ 		}
+-
+ 		return nil
+ 	})
+-
+-	// 检查我们在遍历过程中是否遇到了错误
+ 	if walkErr != nil {
+-		return &ToolResult{
+-			ToolName: g.Name(),
+-			Success:  false,
+-			Error:    walkErr.Error(),
+-		}
++		return &ToolResult{ToolName: g.Name(), Success: false, Error: walkErr.Error()}
+ 	}
+-
+ 	if err != nil {
+-		return &ToolResult{
+-			ToolName: g.Name(),
+-			Success:  false,
+-			Error:    err.Error(),
+-		}
++		return &ToolResult{ToolName: g.Name(), Success: false, Error: err.Error()}
+ 	}
+-
+-	// 如果没有找到结果
+-	if results == "" {
+-		return &ToolResult{
+-			ToolName: g.Name(),
+-			Success:  true,
+-			Output:   "未找到匹配项。",
+-			Metadata: map[string]interface{}{
+-				"pattern": pattern,
+-				"path":    searchPath,
+-				"include": includePattern,
+-			},
+-		}
+-	}
+-
+-	return &ToolResult{
+-		ToolName: g.Name(),
+-		Success:  true,
+-		Output:   results,
+-		Metadata: map[string]interface{}{
+-			"pattern": pattern,
+-			"path":    searchPath,
+-			"include": includePattern,
+-			"matches": len(results),
+-		},
++	if results.Len() == 0 {
++		return &ToolResult{ToolName: g.Name(), Success: true, Output: "未找到匹配项。", Metadata: map[string]interface{}{"pattern": pattern, "path": searchPath, "include": includePattern}}
+ 	}
++	return &ToolResult{ToolName: g.Name(), Success: true, Output: results.String(), Metadata: map[string]interface{}{"pattern": pattern, "path": searchPath, "include": includePattern, "matches": results.Len()}}
+ }
+diff --git a/internal/server/infra/tools/list.go b/internal/server/infra/tools/list.go
+index 7ec0510..386270f 100644
+--- a/internal/server/infra/tools/list.go
++++ b/internal/server/infra/tools/list.go
+@@ -3,76 +3,55 @@ package tools
+ import (
+ 	"fmt"
+ 	"os"
++	"strings"
+ )
+ 
+ // ListTool 列出目录内容。
+ type ListTool struct{}
+ 
+-// Name 返回工具名称。
+-func (l *ListTool) Name() string {
+-	return "list"
+-}
++func (l *ListTool) Name() string { return "list" }
+ 
+-// Description 返回工具描述。
+ func (l *ListTool) Description() string {
+ 	return "列出指定路径中的文件和目录。每行返回一个条目，子目录后跟 '/'。"
+ }
+ 
+-// Run 执行列表工具，使用给定的参数。
+-// 期望的参数：
+-//   - path: 要列出的目录（可选，默认：当前目录）
++func (l *ListTool) Schema() ToolSchema {
++	return ToolSchema{
++		Name:        l.Name(),
++		Description: l.Description(),
++		Parameters:  []ToolParameter{{Name: "path", Type: "string", Description: "要列出的目录路径"}},
++	}
++}
++
+ func (l *ListTool) Run(params map[string]interface{}) *ToolResult {
+-	// 解析可选的path参数
+-	path := "." // 默认为当前目录
++	path := "."
+ 	if pathParam, ok := params["path"]; ok {
+-		path, ok = pathParam.(string)
+-		if !ok {
+-			return &ToolResult{
+-				ToolName: l.Name(),
+-				Success:  false,
+-				Error:    "path 必须是字符串",
+-			}
++		var ok2 bool
++		path, ok2 = pathParam.(string)
++		if !ok2 {
++			return &ToolResult{ToolName: l.Name(), Success: false, Error: "path 必须是字符串"}
+ 		}
+ 	}
+ 
+-	// 打开目录
+ 	file, err := os.Open(path)
+ 	if err != nil {
+-		return &ToolResult{
+-			ToolName: l.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("打开目录失败: %v", err),
+-		}
++		return &ToolResult{ToolName: l.Name(), Success: false, Error: fmt.Sprintf("打开目录失败: %v", err)}
+ 	}
+ 	defer file.Close()
+ 
+-	// 读取目录内容
+ 	entries, err := file.Readdir(-1)
+ 	if err != nil {
+-		return &ToolResult{
+-			ToolName: l.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("读取目录失败: %v", err),
+-		}
++		return &ToolResult{ToolName: l.Name(), Success: false, Error: fmt.Sprintf("读取目录失败: %v", err)}
+ 	}
+ 
+-	// 格式化输出
+-	var output string
++	var output strings.Builder
+ 	for _, entry := range entries {
+ 		if entry.IsDir() {
+-			output += entry.Name() + "/\n"
++			output.WriteString(entry.Name() + "/\n")
+ 		} else {
+-			output += entry.Name() + "\n"
++			output.WriteString(entry.Name() + "\n")
+ 		}
+ 	}
+ 
+-	return &ToolResult{
+-		ToolName: l.Name(),
+-		Success:  true,
+-		Output:   output,
+-		Metadata: map[string]interface{}{
+-			"path":  path,
+-			"count": len(entries),
+-		},
+-	}
++	return &ToolResult{ToolName: l.Name(), Success: true, Output: output.String(), Metadata: map[string]interface{}{"path": path, "count": len(entries)}}
+ }
+diff --git a/internal/server/infra/tools/read.go b/internal/server/infra/tools/read.go
+index 05d614c..fd44525 100644
+--- a/internal/server/infra/tools/read.go
++++ b/internal/server/infra/tools/read.go
+@@ -5,47 +5,40 @@ import (
+ 	"fmt"
+ 	"os"
+ 	"strconv"
++	"strings"
+ )
+ 
+ // ReadTool 读取文件内容，支持可选的行范围参数。
+ type ReadTool struct{}
+ 
+-// Name 返回工具名称。
+-func (r *ReadTool) Name() string {
+-	return "read"
+-}
++func (r *ReadTool) Name() string { return "read" }
+ 
+-// Description 返回工具描述。
+ func (r *ReadTool) Description() string {
+ 	return "从本地文件系统读取文件或目录。支持读取特定行范围。"
+ }
+ 
+-// Run 执行读取工具，使用给定的参数。
+-// 期望的参数：
+-//   - filePath: 要读取的文件或目录的绝对路径（必需）
+-//   - offset: 开始读取的行号（1-indexed，可选，默认：1）
+-//   - limit: 最大读取行数（可选，默认：2000）
++func (r *ReadTool) Schema() ToolSchema {
++	return ToolSchema{
++		Name:        r.Name(),
++		Description: r.Description(),
++		Parameters: []ToolParameter{
++			{Name: "filePath", Type: "string", Required: true, Description: "要读取的文件或目录路径"},
++			{Name: "offset", Type: "number", Description: "开始读取的行号（1-indexed）"},
++			{Name: "limit", Type: "number", Description: "最多读取多少行"},
++		},
++	}
++}
++
+ func (r *ReadTool) Run(params map[string]interface{}) *ToolResult {
+-	// 验证必需参数
+ 	filePathParam, ok := params["filePath"]
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: r.Name(),
+-			Success:  false,
+-			Error:    "缺少必需参数: filePath",
+-		}
++		return &ToolResult{ToolName: r.Name(), Success: false, Error: "缺少必需参数: filePath"}
+ 	}
+-
+ 	filePath, ok := filePathParam.(string)
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: r.Name(),
+-			Success:  false,
+-			Error:    "filePath 必须是字符串",
+-		}
++		return &ToolResult{ToolName: r.Name(), Success: false, Error: "filePath 必须是字符串"}
+ 	}
+ 
+-	// 解析带有默认值的可选参数
+ 	offset := 1
+ 	if offsetParam, ok := params["offset"]; ok {
+ 		switch v := offsetParam.(type) {
+@@ -54,21 +47,13 @@ func (r *ReadTool) Run(params map[string]interface{}) *ToolResult {
+ 		case int:
+ 			offset = v
+ 		case string:
+-			if parsed, err := strconv.Atoi(v); err == nil {
+-				offset = parsed
+-			} else {
+-				return &ToolResult{
+-					ToolName: r.Name(),
+-					Success:  false,
+-					Error:    "offset 必须是数字",
+-				}
++			parsed, err := strconv.Atoi(v)
++			if err != nil {
++				return &ToolResult{ToolName: r.Name(), Success: false, Error: "offset 必须是数字"}
+ 			}
++			offset = parsed
+ 		default:
+-			return &ToolResult{
+-				ToolName: r.Name(),
+-				Success:  false,
+-				Error:    "offset 必须是数字",
+-			}
++			return &ToolResult{ToolName: r.Name(), Success: false, Error: "offset 必须是数字"}
+ 		}
+ 	}
+ 
+@@ -80,129 +65,68 @@ func (r *ReadTool) Run(params map[string]interface{}) *ToolResult {
+ 		case int:
+ 			limit = v
+ 		case string:
+-			if parsed, err := strconv.Atoi(v); err == nil {
+-				limit = parsed
+-			} else {
+-				return &ToolResult{
+-					ToolName: r.Name(),
+-					Success:  false,
+-					Error:    "limit 必须是数字",
+-				}
++			parsed, err := strconv.Atoi(v)
++			if err != nil {
++				return &ToolResult{ToolName: r.Name(), Success: false, Error: "limit 必须是数字"}
+ 			}
++			limit = parsed
+ 		default:
+-			return &ToolResult{
+-				ToolName: r.Name(),
+-				Success:  false,
+-				Error:    "limit 必须是数字",
+-			}
++			return &ToolResult{ToolName: r.Name(), Success: false, Error: "limit 必须是数字"}
+ 		}
+ 	}
+ 
+-	// 验证参数
+ 	if offset < 1 {
+-		return &ToolResult{
+-			ToolName: r.Name(),
+-			Success:  false,
+-			Error:    "offset 必须 >= 1",
+-		}
++		return &ToolResult{ToolName: r.Name(), Success: false, Error: "offset 必须 >= 1"}
+ 	}
+-
+ 	if limit < 1 {
+-		return &ToolResult{
+-			ToolName: r.Name(),
+-			Success:  false,
+-			Error:    "limit 必须 >= 1",
+-		}
++		return &ToolResult{ToolName: r.Name(), Success: false, Error: "limit 必须 >= 1"}
+ 	}
+ 
+-	// 打开文件
+ 	file, err := os.Open(filePath)
+ 	if err != nil {
+-		return &ToolResult{
+-			ToolName: r.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("打开文件失败: %v", err),
+-		}
++		return &ToolResult{ToolName: r.Name(), Success: false, Error: fmt.Sprintf("打开文件失败: %v", err)}
+ 	}
+ 	defer file.Close()
+ 
+-	// 获取文件信息以检查是否为目录
+ 	info, err := file.Stat()
+ 	if err != nil {
+-		return &ToolResult{
+-			ToolName: r.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("获取文件状态失败: %v", err),
+-		}
++		return &ToolResult{ToolName: r.Name(), Success: false, Error: fmt.Sprintf("获取文件状态失败: %v", err)}
+ 	}
+ 
+-	var output string
+-
++	var output strings.Builder
+ 	if info.IsDir() {
+-		// 读取目录内容
+ 		files, err := os.ReadDir(filePath)
+ 		if err != nil {
+-			return &ToolResult{
+-				ToolName: r.Name(),
+-				Success:  false,
+-				Error:    fmt.Sprintf("读取目录失败: %v", err),
+-			}
++			return &ToolResult{ToolName: r.Name(), Success: false, Error: fmt.Sprintf("读取目录失败: %v", err)}
+ 		}
+-
+-		// 格式化目录列表
+ 		for _, f := range files {
+ 			if f.IsDir() {
+-				output += f.Name() + "/\n"
++				output.WriteString(f.Name() + "/\n")
+ 			} else {
+-				output += f.Name() + "\n"
++				output.WriteString(f.Name() + "\n")
+ 			}
+ 		}
+-
+-		return &ToolResult{
+-			ToolName: r.Name(),
+-			Success:  true,
+-			Output:   output,
+-		}
++		return &ToolResult{ToolName: r.Name(), Success: true, Output: output.String()}
+ 	}
+ 
+-	// 按行范围读取文件内容
+ 	var lines []string
+ 	scanner := bufio.NewScanner(file)
+ 	currentLine := 1
+-
+-	// 跳过直到达到偏移量的行
+ 	for scanner.Scan() && currentLine < offset {
+ 		currentLine++
+ 	}
+-
+-	// 读取最多limit行
+ 	for scanner.Scan() && len(lines) < limit {
+ 		lines = append(lines, scanner.Text())
+ 		currentLine++
+ 	}
+-
+ 	if err := scanner.Err(); err != nil {
+-		return &ToolResult{
+-			ToolName: r.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("读取文件错误: %v", err),
+-		}
++		return &ToolResult{ToolName: r.Name(), Success: false, Error: fmt.Sprintf("读取文件错误: %v", err)}
+ 	}
+ 
+-	// 格式化输出，包含行号
+ 	for i, line := range lines {
+ 		lineNum := offset + i
+-		output += fmt.Sprintf("%d: %s\n", lineNum, line)
++		output.WriteString(fmt.Sprintf("%d: %s\n", lineNum, line))
+ 	}
+ 
+-	return &ToolResult{
+-		ToolName: r.Name(),
+-		Success:  true,
+-		Output:   output,
+-		Metadata: map[string]interface{}{
+-			"linesReturned": len(lines),
+-			"offset":        offset,
+-			"limit":         limit,
+-		},
+-	}
++	return &ToolResult{ToolName: r.Name(), Success: true, Output: output.String(), Metadata: map[string]interface{}{"linesReturned": len(lines), "offset": offset, "limit": limit}}
+ }
+diff --git a/internal/server/infra/tools/tool.go b/internal/server/infra/tools/tool.go
+index ab7efd4..3607409 100644
+--- a/internal/server/infra/tools/tool.go
++++ b/internal/server/infra/tools/tool.go
+@@ -2,6 +2,10 @@ package tools
+ 
+ import (
+ 	"encoding/json"
++	"fmt"
++	"sort"
++	"strings"
++	"sync"
+ )
+ 
+ // Tool 定义了所有工具必须实现的接口。
+@@ -10,22 +14,33 @@ type Tool interface {
+ 	Name() string
+ 	// Description 返回工具的人类可读描述。
+ 	Description() string
+-	// Run 执行工具并返回ToolResult。
+-	// 参数以map[string]interface{}形式传递，以匹配预期的AI调用格式。
++	// Schema 返回工具调用参数的结构化定义。
++	Schema() ToolSchema
++	// Run 执行工具并返回 ToolResult。
+ 	Run(params map[string]interface{}) *ToolResult
+ }
+ 
++// ToolSchema 描述工具参数结构。
++type ToolSchema struct {
++	Name        string          `json:"name"`
++	Description string          `json:"description"`
++	Parameters  []ToolParameter `json:"parameters"`
++}
++
++// ToolParameter 描述单个工具参数。
++type ToolParameter struct {
++	Name        string `json:"name"`
++	Type        string `json:"type"`
++	Required    bool   `json:"required,omitempty"`
++	Description string `json:"description,omitempty"`
++}
++
+ // ToolResult 表示执行工具的结果。
+ type ToolResult struct {
+-	// ToolName 是生成此结果的工具的名称。
+-	ToolName string `json:"tool"`
+-	// Success 指示工具是否成功执行。
+-	Success bool `json:"success"`
+-	// Output 包含工具的成功输出（如果有）。
+-	Output string `json:"output,omitempty"`
+-	// Error 包含工具失败时的错误信息。
+-	Error string `json:"error,omitempty"`
+-	// Metadata 包含关于执行的附加信息。
++	ToolName string                 `json:"tool"`
++	Success  bool                   `json:"success"`
++	Output   string                 `json:"output,omitempty"`
++	Error    string                 `json:"error,omitempty"`
+ 	Metadata map[string]interface{} `json:"metadata,omitempty"`
+ }
+ 
+@@ -34,31 +49,98 @@ type ToolRegistry struct {
+ 	tools map[string]Tool
+ }
+ 
+-// GlobalRegistry 是ToolRegistry的单例实例。
+-var GlobalRegistry = &ToolRegistry{
+-	tools: make(map[string]Tool),
+-}
++var (
++	initToolsOnce sync.Once
++
++	// GlobalRegistry 是 ToolRegistry 的单例实例。
++	GlobalRegistry = &ToolRegistry{tools: make(map[string]Tool)}
++)
+ 
+-// Register 向注册表添加一个工具。
+ func (r *ToolRegistry) Register(tool Tool) {
+ 	r.tools[tool.Name()] = tool
+ }
+ 
+-// Get 根据名称从注册表中检索一个工具。
+ func (r *ToolRegistry) Get(name string) Tool {
+ 	return r.tools[name]
+ }
+ 
+-// ListTools 返回所有已注册工具名称的切片。
+ func (r *ToolRegistry) ListTools() []string {
+ 	keys := make([]string, 0, len(r.tools))
+ 	for k := range r.tools {
+ 		keys = append(keys, k)
+ 	}
++	sort.Strings(keys)
+ 	return keys
+ }
+ 
+-// MarshalJSON 自定义ToolResult的JSON编码以省略空字段。
++func (r *ToolRegistry) Schemas() []ToolSchema {
++	names := r.ListTools()
++	schemas := make([]ToolSchema, 0, len(names))
++	for _, name := range names {
++		tool := r.tools[name]
++		if tool == nil {
++			continue
++		}
++		schemas = append(schemas, tool.Schema())
++	}
++	return schemas
++}
++
++func ValidateParams(schema ToolSchema, params map[string]interface{}) error {
++	allowed := make(map[string]ToolParameter, len(schema.Parameters))
++	for _, param := range schema.Parameters {
++		allowed[param.Name] = param
++		if param.Required {
++			value, ok := params[param.Name]
++			if !ok || value == nil {
++				return fmt.Errorf("缺少必需参数: %s", param.Name)
++			}
++		}
++	}
++
++	for key, value := range params {
++		param, ok := allowed[key]
++		if !ok {
++			return fmt.Errorf("未知参数: %s", key)
++		}
++		if value == nil {
++			continue
++		}
++		if err := validateParamType(param.Type, value); err != nil {
++			return fmt.Errorf("参数 %s 校验失败: %w", key, err)
++		}
++	}
++	return nil
++}
++
++func validateParamType(expected string, value interface{}) error {
++	switch expected {
++	case "string":
++		if _, ok := value.(string); !ok {
++			return fmt.Errorf("期望 string")
++		}
++	case "number":
++		switch value.(type) {
++		case int, int32, int64, float32, float64, string:
++			return nil
++		default:
++			return fmt.Errorf("期望 number")
++		}
++	case "boolean":
++		switch value.(type) {
++		case bool, string:
++			return nil
++		default:
++			return fmt.Errorf("期望 boolean")
++		}
++	case "object":
++		if _, ok := value.(map[string]interface{}); !ok {
++			return fmt.Errorf("期望 object")
++		}
++	}
++	return nil
++}
++
+ func (tr *ToolResult) MarshalJSON() ([]byte, error) {
+ 	type Alias ToolResult
+ 	return json.Marshal(&struct {
+@@ -72,17 +154,44 @@ func (tr *ToolResult) MarshalJSON() ([]byte, error) {
+ 	})
+ }
+ 
+-// JsonMarshalIndent 用于缩进JSON编码
+ func JsonMarshalIndent(v interface{}, prefix, indent string) ([]byte, error) {
+ 	return json.MarshalIndent(v, prefix, indent)
+ }
+ 
+-// Initialize 注册所有标准工具。
++func FormatSchemasForPrompt(schemas []ToolSchema) string {
++	var b strings.Builder
++	for _, schema := range schemas {
++		b.WriteString("- ")
++		b.WriteString(schema.Name)
++		b.WriteString(": ")
++		b.WriteString(schema.Description)
++		b.WriteString("\n")
++		for _, param := range schema.Parameters {
++			required := "optional"
++			if param.Required {
++				required = "required"
++			}
++			b.WriteString("  - ")
++			b.WriteString(param.Name)
++			b.WriteString(" (")
++			b.WriteString(param.Type)
++			b.WriteString(", ")
++			b.WriteString(required)
++			b.WriteString("): ")
++			b.WriteString(param.Description)
++			b.WriteString("\n")
++		}
++	}
++	return strings.TrimSpace(b.String())
++}
++
+ func Initialize() {
+-	GlobalRegistry.Register(&ReadTool{})
+-	GlobalRegistry.Register(&WriteTool{})
+-	GlobalRegistry.Register(&EditTool{})
+-	GlobalRegistry.Register(&BashTool{})
+-	GlobalRegistry.Register(&ListTool{})
+-	GlobalRegistry.Register(&GrepTool{})
++	initToolsOnce.Do(func() {
++		GlobalRegistry.Register(&ReadTool{})
++		GlobalRegistry.Register(&WriteTool{})
++		GlobalRegistry.Register(&EditTool{})
++		GlobalRegistry.Register(&BashTool{})
++		GlobalRegistry.Register(&ListTool{})
++		GlobalRegistry.Register(&GrepTool{})
++	})
+ }
+diff --git a/internal/server/infra/tools/write.go b/internal/server/infra/tools/write.go
+index 5a08688..01db9c6 100644
+--- a/internal/server/infra/tools/write.go
++++ b/internal/server/infra/tools/write.go
+@@ -8,77 +8,33 @@ import (
+ 
+ type WriteTool struct{}
+ 
+-func (w *WriteTool) Name() string {
+-	return "write"
++func (w *WriteTool) Name() string        { return "write" }
++func (w *WriteTool) Description() string { return "Write a file to the local filesystem.写入文件" }
++func (w *WriteTool) Schema() ToolSchema {
++	return ToolSchema{Name: w.Name(), Description: w.Description(), Parameters: []ToolParameter{{Name: "filePath", Type: "string", Required: true, Description: "要写入的文件路径"}, {Name: "content", Type: "string", Required: true, Description: "写入文件的完整内容"}}}
+ }
+-
+-func (w *WriteTool) Description() string {
+-	return "Write a file to the local filesystem.写入文件"
+-}
+-
+ func (w *WriteTool) Run(params map[string]interface{}) *ToolResult {
+-	// 主要逻辑
+ 	filePathParam, ok := params["filePath"]
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: w.Name(),
+-			Success:  false,
+-			Error:    "缺少必填参数: filePath",
+-		}
++		return &ToolResult{ToolName: w.Name(), Success: false, Error: "缺少必填参数: filePath"}
+ 	}
+-
+ 	filePath, ok := filePathParam.(string)
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: w.Name(),
+-			Success:  false,
+-			Error:    "filePath 必须是字符串",
+-		}
++		return &ToolResult{ToolName: w.Name(), Success: false, Error: "filePath 必须是字符串"}
+ 	}
+-
+ 	contentParam, ok := params["content"]
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: w.Name(),
+-			Success:  false,
+-			Error:    "缺少必填参数: content",
+-		}
++		return &ToolResult{ToolName: w.Name(), Success: false, Error: "缺少必填参数: content"}
+ 	}
+-
+ 	content, ok := contentParam.(string)
+ 	if !ok {
+-		return &ToolResult{
+-			ToolName: w.Name(),
+-			Success:  false,
+-			Error:    "content 必须是字符串",
+-		}
++		return &ToolResult{ToolName: w.Name(), Success: false, Error: "content 必须是字符串"}
+ 	}
+-
+-	// 创建目录（如果不存在）
+ 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+-		return &ToolResult{
+-			ToolName: w.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("创建目录失败: %v", err),
+-		}
++		return &ToolResult{ToolName: w.Name(), Success: false, Error: fmt.Sprintf("创建目录失败: %v", err)}
+ 	}
+-
+-	err := os.WriteFile(filePath, []byte(content), 0644)
+-	if err != nil {
+-		return &ToolResult{
+-			ToolName: w.Name(),
+-			Success:  false,
+-			Error:    fmt.Sprintf("写入文件失败: %v", err),
+-		}
+-	}
+-
+-	return &ToolResult{
+-		ToolName: w.Name(),
+-		Success:  true,
+-		Output:   fmt.Sprintf("成功写入 %s", filePath),
+-		Metadata: map[string]interface{}{
+-			"bytesWritten": len(content),
+-			"filePath":     filePath,
+-		},
++	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
++		return &ToolResult{ToolName: w.Name(), Success: false, Error: fmt.Sprintf("写入文件失败: %v", err)}
+ 	}
++	return &ToolResult{ToolName: w.Name(), Success: true, Output: fmt.Sprintf("成功写入 %s", filePath), Metadata: map[string]interface{}{"bytesWritten": len(content), "filePath": filePath}}
+ }
+diff --git a/internal/server/service/chat_service.go b/internal/server/service/chat_service.go
+index e0b334d..f96c7c7 100644
+--- a/internal/server/service/chat_service.go
++++ b/internal/server/service/chat_service.go
+@@ -2,10 +2,18 @@ package service
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"fmt"
+ 	"strings"
+ 
+ 	"go-llm-demo/internal/server/domain"
++	"go-llm-demo/internal/server/infra/tools"
++)
++
++const (
++	maxToolSteps          = 6
++	maxToolExecutionRetry = 2
++	maxAIResponseRetry    = 2
+ )
+ 
+ type chatServiceImpl struct {
+@@ -15,7 +23,13 @@ type chatServiceImpl struct {
+ 	provider   domain.ChatProvider
+ }
+ 
++type toolCallPayload struct {
++	Tool   string                 `json:"tool"`
++	Params map[string]interface{} `json:"params"`
++}
++
+ func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMemoryService, roleSvc domain.RoleService, provider domain.ChatProvider) domain.ChatGateway {
++	tools.Initialize()
+ 	return &chatServiceImpl{
+ 		memorySvc:  memorySvc,
+ 		workingSvc: workingSvc,
+@@ -25,23 +39,73 @@ func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMem
+ }
+ 
+ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-chan string, error) {
+-	messages := req.Messages
+-
+-	rolePrompt, err := s.roleSvc.GetActivePrompt(ctx)
++	preparedMessages, userInput, err := s.prepareMessages(ctx, req.Messages)
+ 	if err != nil {
+-		fmt.Printf("获取角色提示失败：%v\n", err)
+-	} else if rolePrompt != "" {
+-		hasSystem := false
+-		for _, msg := range messages {
+-			if msg.Role == "system" {
+-				hasSystem = true
++		return nil, err
++	}
++
++	resultChan := make(chan string)
++	go func() {
++		defer close(resultChan)
++
++		messages := append([]domain.Message{}, preparedMessages...)
++		finalReply := ""
++
++		for step := 0; step < maxToolSteps; step++ {
++			reply, chatErr := s.collectAssistantReplyWithRetry(ctx, messages)
++			if chatErr != nil {
++				finalReply = fmt.Sprintf("抱歉，AI 响应失败：%v", chatErr)
++				break
++			}
++
++			call, ok, extractErr := extractToolCall(reply)
++			if extractErr != nil {
++				messages = append(messages,
++					domain.Message{Role: "assistant", Content: reply},
++					domain.Message{Role: "system", Content: fmt.Sprintf("工具调用协议解析失败：%v。请严格按照 JSON 协议重试，或直接输出最终答案。", extractErr)},
++				)
++				continue
++			}
++			if !ok {
++				finalReply = reply
+ 				break
+ 			}
++
++			messages = append(messages, domain.Message{Role: "assistant", Content: reply})
++			toolResult, execErr := s.executeToolWithRetry(call)
++			if execErr != nil {
++				messages = append(messages, domain.Message{Role: "system", Content: fmt.Sprintf("工具执行失败：%v。请修正参数、尝试其他工具，或直接给出不调用工具的答复。", execErr)})
++				continue
++			}
++
++			toolJSON, marshalErr := json.Marshal(toolResult)
++			if marshalErr != nil {
++				messages = append(messages, domain.Message{Role: "system", Content: fmt.Sprintf("工具执行完成，但结果编码失败：%v。请总结当前结果。", marshalErr)})
++				continue
++			}
++			messages = append(messages, domain.Message{Role: "system", Content: fmt.Sprintf("工具执行结果：%s", string(toolJSON))})
+ 		}
+ 
+-		if !hasSystem {
+-			messages = append([]domain.Message{{Role: "system", Content: rolePrompt}}, messages...)
++		if strings.TrimSpace(finalReply) == "" {
++			finalReply = "抱歉，我未能在限定步数内完成 ReAct 流程，请调整请求后重试。"
+ 		}
++
++		s.streamString(resultChan, finalReply)
++		s.persistMemory(req.Messages, userInput, finalReply)
++	}()
++
++	return resultChan, nil
++}
++
++func (s *chatServiceImpl) prepareMessages(ctx context.Context, incoming []domain.Message) ([]domain.Message, string, error) {
++	messages := append([]domain.Message{}, incoming...)
++
++	rolePrompt, err := s.roleSvc.GetActivePrompt(ctx)
++	if err != nil {
++		fmt.Printf("获取角色提示失败：%v\n", err)
++	}
++	if rolePrompt != "" && !hasSystemMessage(messages) {
++		messages = append([]domain.Message{{Role: "system", Content: rolePrompt}}, messages...)
+ 	}
+ 
+ 	userInput := s.latestUserInput(messages)
+@@ -49,60 +113,190 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
+ 	if s.workingSvc != nil {
+ 		workingContext, err = s.workingSvc.BuildContext(ctx, messages)
+ 		if err != nil {
+-			return nil, err
++			return nil, "", err
+ 		}
+ 	}
++
++	memoryContext := ""
+ 	if userInput != "" {
+-		memoryContext, err := s.memorySvc.BuildContext(ctx, userInput)
++		memoryContext, err = s.memorySvc.BuildContext(ctx, userInput)
+ 		if err != nil {
+-			return nil, err
+-		}
+-		combinedContext := joinContextBlocks(workingContext, memoryContext)
+-		if combinedContext != "" {
+-			if rolePrompt != "" && len(messages) > 0 && messages[0].Role == "system" {
+-				messages[0].Content = rolePrompt + "\n\n" + combinedContext
+-			} else {
+-				messages = append([]domain.Message{{Role: "system", Content: combinedContext}}, messages...)
+-			}
++			return nil, "", err
+ 		}
+-	} else if workingContext != "" {
+-		if rolePrompt != "" && len(messages) > 0 && messages[0].Role == "system" {
+-			messages[0].Content = rolePrompt + "\n\n" + workingContext
++	}
++
++	toolProtocol := buildToolProtocolPrompt()
++	combinedContext := joinContextBlocks(workingContext, memoryContext, toolProtocol)
++	if combinedContext != "" {
++		if len(messages) > 0 && messages[0].Role == "system" {
++			messages[0].Content = joinContextBlocks(messages[0].Content, combinedContext)
+ 		} else {
+-			messages = append([]domain.Message{{Role: "system", Content: workingContext}}, messages...)
++			messages = append([]domain.Message{{Role: "system", Content: combinedContext}}, messages...)
++		}
++	}
++
++	return messages, userInput, nil
++}
++
++func buildToolProtocolPrompt() string {
++	schemas := tools.GlobalRegistry.Schemas()
++	return strings.TrimSpace(`你可以在需要时调用工具。
++当且仅当你确定需要调用工具时，必须只输出一个 JSON 对象，不要输出 Markdown、解释文本或额外字符。
++JSON 格式如下：
++{"tool":"工具名","params":{...}}
++如果不需要调用工具，请直接输出对用户可见的最终答复。
++调用工具前请确保参数名与 schema 完全一致，并且不要传递未声明参数。可用工具如下：
++` + tools.FormatSchemasForPrompt(schemas))
++}
++
++func hasSystemMessage(messages []domain.Message) bool {
++	for _, msg := range messages {
++		if msg.Role == "system" {
++			return true
+ 		}
+ 	}
++	return false
++}
+ 
++func (s *chatServiceImpl) collectAssistantReplyWithRetry(ctx context.Context, messages []domain.Message) (string, error) {
++	var lastErr error
++	for attempt := 1; attempt <= maxAIResponseRetry; attempt++ {
++		reply, err := s.collectAssistantReply(ctx, messages)
++		if err == nil && strings.TrimSpace(reply) != "" {
++			return reply, nil
++		}
++		if err != nil {
++			lastErr = err
++		} else {
++			lastErr = fmt.Errorf("AI 没有返回有效内容")
++		}
++	}
++	return "", lastErr
++}
++
++func (s *chatServiceImpl) collectAssistantReply(ctx context.Context, messages []domain.Message) (string, error) {
+ 	out, err := s.provider.Chat(ctx, messages)
+ 	if err != nil {
+-		return nil, err
++		return "", err
+ 	}
++	var replyBuilder strings.Builder
++	for chunk := range out {
++		replyBuilder.WriteString(chunk)
++	}
++	return replyBuilder.String(), nil
++}
+ 
+-	resultChan := make(chan string)
+-	go func() {
+-		defer close(resultChan)
++func extractToolCall(reply string) (*toolCallPayload, bool, error) {
++	candidate, ok := extractJSONObjectCandidate(reply)
++	if !ok {
++		return nil, false, nil
++	}
+ 
+-		var replyBuilder strings.Builder
+-		for chunk := range out {
+-			replyBuilder.WriteString(chunk)
+-			resultChan <- chunk
++	var payload toolCallPayload
++	if err := json.Unmarshal([]byte(candidate), &payload); err != nil {
++		return nil, false, fmt.Errorf("JSON 解析失败: %w", err)
++	}
++	if strings.TrimSpace(payload.Tool) == "" {
++		return nil, false, fmt.Errorf("缺少 tool 字段")
++	}
++	if payload.Params == nil {
++		payload.Params = map[string]interface{}{}
++	}
++	payload.Params = normalizeParamKeys(payload.Params)
++	return &payload, true, nil
++}
++
++func extractJSONObjectCandidate(reply string) (string, bool) {
++	trimmed := strings.TrimSpace(reply)
++	if trimmed == "" {
++		return "", false
++	}
++
++	if strings.HasPrefix(trimmed, "```") {
++		parts := strings.SplitN(trimmed, "\n", 2)
++		if len(parts) < 2 {
++			return "", false
++		}
++		body := parts[1]
++		end := strings.LastIndex(body, "```")
++		if end < 0 {
++			return "", false
+ 		}
++		trimmed = strings.TrimSpace(body[:end])
++	}
++
++	if !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
++		return "", false
++	}
++	return trimmed, true
++}
+ 
+-		if userInput != "" && replyBuilder.Len() > 0 {
+-			if s.workingSvc != nil {
+-				updatedMessages := append([]domain.Message{}, req.Messages...)
+-				updatedMessages = append(updatedMessages, domain.Message{Role: "assistant", Content: replyBuilder.String()})
+-				if err := s.workingSvc.Refresh(context.Background(), updatedMessages); err != nil {
+-					fmt.Printf("工作记忆刷新失败：%v\n", err)
+-				}
++func normalizeParamKeys(params map[string]interface{}) map[string]interface{} {
++	result := make(map[string]interface{}, len(params))
++	for key, value := range params {
++		parts := strings.Split(key, "_")
++		camelKey := parts[0]
++		for i := 1; i < len(parts); i++ {
++			if len(parts[i]) > 0 {
++				camelKey += strings.ToUpper(parts[i][:1]) + parts[i][1:]
+ 			}
+-			if err := s.memorySvc.Save(context.Background(), userInput, replyBuilder.String()); err != nil {
+-				fmt.Printf("记忆保存失败：%v\n", err)
++		}
++		result[camelKey] = value
++	}
++	return result
++}
++
++func (s *chatServiceImpl) executeToolWithRetry(call *toolCallPayload) (*tools.ToolResult, error) {
++	tool := tools.GlobalRegistry.Get(call.Tool)
++	if tool == nil {
++		return nil, fmt.Errorf("不支持的工具: %s", call.Tool)
++	}
++	if err := tools.ValidateParams(tool.Schema(), call.Params); err != nil {
++		return nil, err
++	}
++
++	var lastErr error
++	for attempt := 1; attempt <= maxToolExecutionRetry; attempt++ {
++		result := tool.Run(call.Params)
++		if result != nil && result.Success {
++			if result.Metadata == nil {
++				result.Metadata = map[string]interface{}{}
+ 			}
++			result.Metadata["attempt"] = attempt
++			return result, nil
+ 		}
+-	}()
++		if result != nil && result.Error != "" {
++			lastErr = fmt.Errorf(result.Error)
++		} else {
++			lastErr = fmt.Errorf("工具执行失败")
++		}
++	}
++	return nil, fmt.Errorf("工具 %s 在 %d 次尝试后仍失败: %w", call.Tool, maxToolExecutionRetry, lastErr)
++}
+ 
+-	return resultChan, nil
++func (s *chatServiceImpl) streamString(out chan<- string, text string) {
++	if text == "" {
++		return
++	}
++	for _, r := range text {
++		out <- string(r)
++	}
++}
++
++func (s *chatServiceImpl) persistMemory(originalMessages []domain.Message, userInput, finalReply string) {
++	if userInput == "" || strings.TrimSpace(finalReply) == "" {
++		return
++	}
++	if s.workingSvc != nil {
++		updatedMessages := append([]domain.Message{}, originalMessages...)
++		updatedMessages = append(updatedMessages, domain.Message{Role: "assistant", Content: finalReply})
++		if err := s.workingSvc.Refresh(context.Background(), updatedMessages); err != nil {
++			fmt.Printf("工作记忆刷新失败：%v\n", err)
++		}
++	}
++	if err := s.memorySvc.Save(context.Background(), userInput, finalReply); err != nil {
++		fmt.Printf("记忆保存失败：%v\n", err)
++	}
+ }
+ 
+ func (s *chatServiceImpl) latestUserInput(messages []domain.Message) string {
+diff --git a/internal/server/service/chat_service_test.go b/internal/server/service/chat_service_test.go
+new file mode 100644
+index 0000000..0180c96
+--- /dev/null
++++ b/internal/server/service/chat_service_test.go
+@@ -0,0 +1,150 @@
++package service
++
++import (
++	"context"
++	"errors"
++	"strings"
++	"testing"
++
++	"go-llm-demo/internal/server/domain"
++	"go-llm-demo/internal/server/infra/tools"
++)
++
++type fakeMemoryService struct{}
++
++func (fakeMemoryService) BuildContext(ctx context.Context, userInput string) (string, error) {
++	return "", nil
++}
++func (fakeMemoryService) Save(ctx context.Context, userInput, reply string) error { return nil }
++func (fakeMemoryService) GetStats(ctx context.Context) (*domain.MemoryStats, error) {
++	return &domain.MemoryStats{}, nil
++}
++func (fakeMemoryService) Clear(ctx context.Context) error        { return nil }
++func (fakeMemoryService) ClearSession(ctx context.Context) error { return nil }
++
++type fakeWorkingMemoryService struct{}
++
++func (fakeWorkingMemoryService) BuildContext(ctx context.Context, messages []domain.Message) (string, error) {
++	return "", nil
++}
++func (fakeWorkingMemoryService) Refresh(ctx context.Context, messages []domain.Message) error {
++	return nil
++}
++func (fakeWorkingMemoryService) Clear(ctx context.Context) error { return nil }
++
++type fakeRoleService struct{}
++
++func (fakeRoleService) GetActivePrompt(ctx context.Context) (string, error) { return "", nil }
++func (fakeRoleService) SetActive(ctx context.Context, roleID string) error  { return nil }
++func (fakeRoleService) List(ctx context.Context) ([]domain.Role, error)     { return nil, nil }
++func (fakeRoleService) Create(ctx context.Context, name, desc, prompt string) (*domain.Role, error) {
++	return nil, nil
++}
++func (fakeRoleService) Delete(ctx context.Context, id string) error { return nil }
++
++type fakeProvider struct {
++	replies [][]string
++	errs    []error
++	calls   [][]domain.Message
++}
++
++func (f *fakeProvider) GetModelName() string { return "fake" }
++func (f *fakeProvider) Chat(ctx context.Context, messages []domain.Message) (<-chan string, error) {
++	idx := len(f.calls)
++	f.calls = append(f.calls, append([]domain.Message{}, messages...))
++	if idx < len(f.errs) && f.errs[idx] != nil {
++		return nil, f.errs[idx]
++	}
++	out := make(chan string, len(f.replies[idx]))
++	for _, chunk := range f.replies[idx] {
++		out <- chunk
++	}
++	close(out)
++	return out, nil
++}
++
++func TestExtractToolCallSupportsJSONFenceAndSnakeCase(t *testing.T) {
++	reply := "```json\n{\"tool\":\"read\",\"params\":{\"file_path\":\"README.md\",\"offset\":1}}\n```"
++	call, ok, err := extractToolCall(reply)
++	if err != nil {
++		t.Fatalf("extractToolCall returned error: %v", err)
++	}
++	if !ok {
++		t.Fatalf("expected tool call to be extracted")
++	}
++	if call.Tool != "read" {
++		t.Fatalf("expected tool read, got %s", call.Tool)
++	}
++	if _, exists := call.Params["filePath"]; !exists {
++		t.Fatalf("expected snake_case parameter to be normalized: %#v", call.Params)
++	}
++}
++
++func TestExtractToolCallIgnoresNaturalLanguageWithBraces(t *testing.T) {
++	reply := "你可以在 config {path} 里继续配置，但这里不需要调用工具。"
++	_, ok, err := extractToolCall(reply)
++	if err != nil {
++		t.Fatalf("expected non-JSON natural language to be ignored, got %v", err)
++	}
++	if ok {
++		t.Fatalf("expected natural language with braces not to be treated as a tool call")
++	}
++}
++
++func TestExecuteToolWithRetryValidatesSchema(t *testing.T) {
++	tools.Initialize()
++	svc := &chatServiceImpl{}
++	_, err := svc.executeToolWithRetry(&toolCallPayload{Tool: "read", Params: map[string]interface{}{"unknown": "x"}})
++	if err == nil || !strings.Contains(err.Error(), "未知参数") {
++		t.Fatalf("expected schema validation error, got %v", err)
++	}
++}
++
++func TestCollectAssistantReplyWithRetryRetriesProviderFailures(t *testing.T) {
++	provider := &fakeProvider{
++		errs:    []error{errors.New("temporary failure"), nil},
++		replies: [][]string{nil, {"修复后的响应"}},
++	}
++	svc := &chatServiceImpl{provider: provider}
++	reply, err := svc.collectAssistantReplyWithRetry(context.Background(), []domain.Message{{Role: "user", Content: "hello"}})
++	if err != nil {
++		t.Fatalf("collectAssistantReplyWithRetry returned error: %v", err)
++	}
++	if reply != "修复后的响应" {
++		t.Fatalf("expected retried response, got %q", reply)
++	}
++	if len(provider.calls) != 2 {
++		t.Fatalf("expected 2 provider calls, got %d", len(provider.calls))
++	}
++}
++
++func TestSendRunsServiceLevelReActLoop(t *testing.T) {
++	provider := &fakeProvider{replies: [][]string{{`{"tool":"list","params":{"path":"."}}`}, {"已完成目录检查"}}}
++	svc := NewChatService(fakeMemoryService{}, fakeWorkingMemoryService{}, fakeRoleService{}, provider)
++	stream, err := svc.Send(context.Background(), &domain.ChatRequest{Messages: []domain.Message{{Role: "user", Content: "看看当前目录"}}})
++	if err != nil {
++		t.Fatalf("Send returned error: %v", err)
++	}
++	var got strings.Builder
++	for chunk := range stream {
++		got.WriteString(chunk)
++	}
++	if got.String() != "已完成目录检查" {
++		t.Fatalf("expected final answer, got %q", got.String())
++	}
++	if len(provider.calls) != 2 {
++		t.Fatalf("expected 2 provider calls, got %d", len(provider.calls))
++	}
++	secondCall := provider.calls[1]
++	joined := make([]string, 0, len(secondCall))
++	for _, msg := range secondCall {
++		joined = append(joined, msg.Content)
++	}
++	joinedText := strings.Join(joined, "\n")
++	if !strings.Contains(joinedText, "工具执行结果") {
++		t.Fatalf("expected tool result to be fed back into second model call, got %s", joinedText)
++	}
++	if !strings.Contains(joinedText, `{"tool":"list"`) {
++		t.Fatalf("expected original tool JSON to be preserved in assistant history, got %s", joinedText)
++	}
++}
+diff --git a/internal/tui/core/msg.go b/internal/tui/core/msg.go
+index e783040..1216b1d 100644
+--- a/internal/tui/core/msg.go
++++ b/internal/tui/core/msg.go
+@@ -2,7 +2,6 @@ package core
+ 
+ import (
+ 	"github.com/charmbracelet/bubbletea"
+-	"go-llm-demo/internal/server/infra/tools"
+ )
+ 
+ type Msg interface{ isMsg() }
+@@ -35,7 +34,9 @@ type (
+ 		Content string
+ 	}
+ 
+-	StreamDoneMsg struct{}
++	StreamDoneMsg struct {
++		Content string
++	}
+ 
+ 	StreamErrorMsg struct {
+ 		Err error
+@@ -61,16 +62,6 @@ type (
+ 	ExitMsg struct{}
+ 
+ 	RefreshMemoryMsg struct{}
+-
+-	// 工具执行结果消息
+-	ToolResultMsg struct {
+-		Result *tools.ToolResult
+-	}
+-
+-	// 工具执行错误消息
+-	ToolErrorMsg struct {
+-		Err error
+-	}
+ )
+ 
+ func (InitMsg) isMsg()          {}
+diff --git a/internal/tui/core/update.go b/internal/tui/core/update.go
+index f3ca5b5..32bfeb5 100644
+--- a/internal/tui/core/update.go
++++ b/internal/tui/core/update.go
+@@ -2,7 +2,6 @@ package core
+ 
+ import (
+ 	"context"
+-	"encoding/json"
+ 	"fmt"
+ 	"os"
+ 	"os/exec"
+@@ -11,7 +10,6 @@ import (
+ 	"unicode/utf8"
+ 
+ 	"go-llm-demo/internal/server/domain"
+-	"go-llm-demo/internal/server/infra/tools"
+ 	"go-llm-demo/internal/tui/infra"
+ 
+ 	tea "github.com/charmbracelet/bubbletea"
+@@ -37,78 +35,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+ 		return m, nil
+ 
+ 	case StreamDoneMsg:
++		if msg.Content != "" && m.generating {
++			m.AppendLastMessage(msg.Content)
++		}
+ 		m.generating = false
+ 		m.FinishLastMessage()
+-
+-		// 检查最后一条AI消息是否为JSON格式的工具调用
+-		if len(m.messages) > 0 {
+-			lastMsg := &m.messages[len(m.messages)-1]
+-			if lastMsg.Role == "assistant" {
+-				// 验证是否为JSON
+-				var jsonData map[string]interface{}
+-				if err := json.Unmarshal([]byte(lastMsg.Content), &jsonData); err == nil {
+-					// 检查是否包含工具调用字段
+-					if toolName, ok := jsonData["tool"].(string); ok && toolName != "" {
+-						// 显示工具执行中提示
+-						if toolParams, ok := jsonData["params"].(map[string]interface{}); ok {
+-							if filePath, ok := toolParams["filePath"].(string); ok && toolName == "read" {
+-								m.AddMessage("system", fmt.Sprintf("read:正在读取%s文件...", filePath))
+-							} else if filePath, ok := toolParams["filePath"].(string); ok && (toolName == "edit" || toolName == "write") {
+-								m.AddMessage("system", fmt.Sprintf("%s:正在处理%s文件...", toolName, filePath))
+-							} else {
+-								m.AddMessage("system", fmt.Sprintf("%s:正在执行工具...", toolName))
+-							}
+-						}
+-
+-						// 在goroutine中执行工具调用
+-						return m, func() tea.Msg {
+-							// 创建工具实例并执行
+-							var tool tools.Tool
+-							switch toolName {
+-							case "read":
+-								tool = &tools.ReadTool{}
+-							case "write":
+-								tool = &tools.WriteTool{}
+-							case "edit":
+-								tool = &tools.EditTool{}
+-							case "bash":
+-								tool = &tools.BashTool{}
+-							case "list":
+-								tool = &tools.ListTool{}
+-							case "grep":
+-								tool = &tools.GrepTool{}
+-							default:
+-								return ToolErrorMsg{Err: fmt.Errorf("不支持的工具: %s", toolName)}
+-							}
+-
+-							// 安全地获取并转换参数
+-							var paramsMap map[string]interface{}
+-							if paramsRaw, ok := jsonData["params"]; ok {
+-								if paramsCasted, ok := paramsRaw.(map[string]interface{}); ok {
+-									// 转换参数键从snake_case到camelCase以兼容AI生成的参数
+-									paramsMap = convertSnakeCaseToCamelCase(paramsCasted)
+-								} else {
+-									return ToolErrorMsg{Err: fmt.Errorf("工具参数格式错误")}
+-								}
+-							} else {
+-								paramsMap = make(map[string]interface{})
+-							}
+-
+-							// 执行工具
+-							result := tool.Run(paramsMap)
+-
+-							// 将结果作为系统消息返回
+-							if result.Success {
+-								return ToolResultMsg{Result: result}
+-							} else {
+-								return ToolErrorMsg{Err: fmt.Errorf("%s", result.Error)}
+-							}
+-						}
+-					}
+-				}
+-			}
+-		}
+-
+ 		return m, nil
+ 
+ 	case StreamErrorMsg:
+@@ -135,25 +66,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+ 	case ExitMsg:
+ 		return m, tea.Quit
+ 
+-	case ToolResultMsg:
+-		// 将工具执行结果添加为系统消息，然后重新获取AI响应
+-		m.AddMessage("system", fmt.Sprintf("工具执行结果: %s", msg.Result.Output))
+-		m.AddMessage("assistant", "")
+-		m.generating = true
+-
+-		// 构建包含工具结果的消息并重新请求AI
+-		messages := m.buildMessages()
+-		return m, m.streamResponse(messages)
+-
+-	case ToolErrorMsg:
+-		// 将工具执行错误添加为系统消息
+-		m.AddMessage("system", fmt.Sprintf("工具执行错误: %v", msg.Err))
+-		m.AddMessage("assistant", "")
+-		m.generating = true
+-
+-		// 构建包含错误信息的消息并重新请求AI
+-		messages := m.buildMessages()
+-		return m, m.streamResponse(messages)
+ 	}
+ 
+ 	return m, cmd
+@@ -562,11 +474,11 @@ func (m *Model) streamResponse(messages []infra.Message) tea.Cmd {
+ 			return StreamErrorMsg{Err: err}
+ 		}
+ 
++		var content strings.Builder
+ 		for chunk := range stream {
+-			m.AppendLastMessage(chunk)
++			content.WriteString(chunk)
+ 		}
+-
+-		return StreamDoneMsg{}
++		return StreamDoneMsg{Content: content.String()}
+ 	}
+ }
+ 
+@@ -625,27 +537,6 @@ func getDelimiter(s string) string {
+ 	return s
+ }
+ 
+-// convertSnakeCaseToCamelCase 将snake_case键转换为camelCase
+-func convertSnakeCaseToCamelCase(params map[string]interface{}) map[string]interface{} {
+-	result := make(map[string]interface{})
+-	for key, value := range params {
+-		// 将snake_case转换为camelCase
+-		parts := strings.Split(key, "_")
+-		if len(parts) > 1 {
+-			camelKey := parts[0]
+-			for i := 1; i < len(parts); i++ {
+-				if len(parts[i]) > 0 {
+-					camelKey += strings.ToUpper(parts[i][:1]) + parts[i][1:]
+-				}
+-			}
+-			result[camelKey] = value
+-		} else {
+-			result[key] = value
+-		}
+-	}
+-	return result
+-}
+-
+ func runCodeCmd(code string) tea.Cmd {
+ 	return func() tea.Msg {
+ 		ext, runner := detectLanguage(code)
