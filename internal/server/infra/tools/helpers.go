@@ -6,6 +6,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+)
+
+const WorkspaceEnvVar = "NEOCODE_WORKSPACE"
+
+var (
+	workspaceRootMu    sync.RWMutex
+	configuredRootPath string
 )
 
 func requiredString(params map[string]interface{}, key string) (string, *ToolResult) {
@@ -78,28 +86,98 @@ func optionalBool(params map[string]interface{}, key string, fallback bool) (boo
 	}
 }
 
-func workspaceRoot() string {
+// ResolveWorkspaceRoot 解析工作区根目录。
+// 优先级：cliOverride > NEOCODE_WORKSPACE > 当前进程工作目录。
+func ResolveWorkspaceRoot(cliOverride string) (string, error) {
+	candidate := strings.TrimSpace(cliOverride)
+	if candidate == "" {
+		candidate = strings.TrimSpace(os.Getenv(WorkspaceEnvVar))
+	}
+	if candidate == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("获取当前工作目录失败: %w", err)
+		}
+		candidate = wd
+	}
+
+	absPath, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", fmt.Errorf("解析工作区绝对路径失败: %w", err)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("读取工作区路径失败: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("工作区路径不是目录: %s", absPath)
+	}
+	return absPath, nil
+}
+
+// SetWorkspaceRoot 固定工具层使用的工作区根目录。
+func SetWorkspaceRoot(path string) error {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return fmt.Errorf("工作区路径不能为空")
+	}
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return fmt.Errorf("解析工作区绝对路径失败: %w", err)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("读取工作区路径失败: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("工作区路径不是目录: %s", absPath)
+	}
+
+	workspaceRootMu.Lock()
+	configuredRootPath = absPath
+	workspaceRootMu.Unlock()
+	return nil
+}
+
+// GetWorkspaceRoot 返回当前固定的工作区根目录。
+// 若尚未设置，则回退到当前进程工作目录。
+func GetWorkspaceRoot() string {
+	workspaceRootMu.RLock()
+	root := configuredRootPath
+	workspaceRootMu.RUnlock()
+	if root != "" {
+		return root
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		return "."
 	}
-	return wd
+	absPath, err := filepath.Abs(wd)
+	if err != nil {
+		return wd
+	}
+	return absPath
+}
+
+func workspaceRoot() string {
+	return GetWorkspaceRoot()
 }
 
 func resolveWorkspacePath(path string) (string, error) {
-	root, err := filepath.Abs(workspaceRoot())
-	if err != nil {
-		return "", err
-	}
+	root := workspaceRoot()
 	candidate := path
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(root, candidate)
 	}
-	candidate, err = filepath.Abs(candidate)
+	candidate, err := filepath.Abs(candidate)
 	if err != nil {
 		return "", err
 	}
-	if candidate != root && !strings.HasPrefix(candidate, root+string(os.PathSeparator)) {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return "", fmt.Errorf("路径超出工作区: %s", path)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return "", fmt.Errorf("路径超出工作区: %s", path)
 	}
 	return candidate, nil
