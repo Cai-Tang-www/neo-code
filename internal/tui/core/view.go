@@ -4,19 +4,20 @@ import (
 	"strings"
 
 	"go-llm-demo/internal/tui/components"
+	"go-llm-demo/internal/tui/state"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 func (m Model) View() string {
-	if m.width < 20 || m.height < 6 {
+	if m.ui.Width < 20 || m.ui.Height < 6 {
 		return "窗口太小"
 	}
 
 	statusHeight := 1
 	helpHeight := 0
-	if m.mode == ModeHelp {
-		helpHeight = minInt(20, m.height-statusHeight-3)
+	if m.ui.Mode == state.ModeHelp {
+		helpHeight = minInt(20, m.ui.Height-statusHeight-3)
 	}
 
 	inputContent := m.renderInputArea()
@@ -25,37 +26,37 @@ func (m Model) View() string {
 		inputHeight = 4
 	}
 
-	contentHeight := m.height - statusHeight - inputHeight - helpHeight
+	contentHeight := m.ui.Height - statusHeight - inputHeight - helpHeight
 	if contentHeight < 3 {
 		contentHeight = 3
 	}
 
 	statusBar := lipgloss.NewStyle().
 		Height(statusHeight).
-		Width(m.width).
+		Width(m.ui.Width).
 		Render(components.StatusBar{
-			Model:      m.activeModel,
-			MemoryCnt:  m.memoryStats.TotalItems,
-			Generating: m.generating,
-			Width:      m.width,
+			Model:      m.chat.ActiveModel,
+			MemoryCnt:  m.chat.MemoryStats.TotalItems,
+			Generating: m.chat.Generating,
+			Width:      m.ui.Width,
 		}.Render())
 
 	viewportView := m.viewport
 	viewportView.SetContent(m.renderChatContent())
 	chatArea := lipgloss.NewStyle().
-		Width(m.width).
+		Width(m.ui.Width).
 		Height(contentHeight).
 		Render(viewportView.View())
 
 	inputArea := lipgloss.NewStyle().
-		Width(m.width).
+		Width(m.ui.Width).
 		Render(inputContent)
 
-	if m.mode == ModeHelp {
+	if m.ui.Mode == state.ModeHelp {
 		help := lipgloss.NewStyle().
-			Width(m.width).
+			Width(m.ui.Width).
 			Height(helpHeight).
-			Render(components.RenderHelp(m.width))
+			Render(components.RenderHelp(m.ui.Width))
 		return lipgloss.JoinVertical(lipgloss.Left, statusBar, chatArea, help, inputArea)
 	}
 
@@ -72,7 +73,7 @@ func countLines(s string) int {
 func (m Model) renderInputArea() string {
 	return components.InputBox{
 		Body:       m.textarea.View(),
-		Generating: m.generating,
+		Generating: m.chat.Generating,
 	}.Render()
 }
 
@@ -81,8 +82,8 @@ func (m Model) renderChatContent() string {
 }
 
 func (m Model) toComponentMessages() []components.Message {
-	messages := make([]components.Message, len(m.messages))
-	for i, msg := range m.messages {
+	messages := make([]components.Message, len(m.chat.Messages))
+	for i, msg := range m.chat.Messages {
 		messages[i] = components.Message{
 			Role:      msg.Role,
 			Content:   msg.Content,

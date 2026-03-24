@@ -34,11 +34,11 @@ func (fakeChatClient) DefaultModel() string {
 
 func TestBuildMessagesSkipsEmptyAssistantPlaceholder(t *testing.T) {
 	m := Model{
-		messages: []state.Message{
+		chat: state.ChatState{Messages: []state.Message{
 			{Role: "system", Content: "persona"},
 			{Role: "user", Content: "hello"},
 			{Role: "assistant", Content: ""},
-		},
+		}},
 	}
 
 	got := m.buildMessages()
@@ -55,51 +55,55 @@ func TestBuildMessagesSkipsEmptyAssistantPlaceholder(t *testing.T) {
 
 func TestStreamErrorReplacesTrailingPlaceholder(t *testing.T) {
 	m := Model{
-		historyTurns: 6,
-		messages: []state.Message{
-			{Role: "user", Content: "hello"},
-			{Role: "assistant", Content: ""},
+		chat: state.ChatState{
+			HistoryTurns: 6,
+			Messages: []state.Message{
+				{Role: "user", Content: "hello"},
+				{Role: "assistant", Content: ""},
+			},
 		},
 	}
 
 	updated, _ := m.Update(StreamErrorMsg{Err: errors.New("boom")})
 	got := updated.(Model)
-	if len(got.messages) != 2 {
-		t.Fatalf("expected placeholder replacement without extra message, got %d messages", len(got.messages))
+	if len(got.chat.Messages) != 2 {
+		t.Fatalf("expected placeholder replacement without extra message, got %d messages", len(got.chat.Messages))
 	}
-	if got.messages[1].Content != "错误: boom" {
-		t.Fatalf("expected trailing placeholder to become error, got %q", got.messages[1].Content)
+	if got.chat.Messages[1].Content != "错误: boom" {
+		t.Fatalf("expected trailing placeholder to become error, got %q", got.chat.Messages[1].Content)
 	}
 }
 
 func TestClearContextDoesNotReinjectStalePersonaMessage(t *testing.T) {
 	m := Model{
-		client:      fakeChatClient{},
-		persona:     "stale persona",
-		apiKeyReady: true,
-		messages: []state.Message{
-			{Role: "system", Content: "stale persona"},
-			{Role: "user", Content: "hello"},
+		client:  fakeChatClient{},
+		persona: "stale persona",
+		chat: state.ChatState{
+			APIKeyReady: true,
+			Messages: []state.Message{
+				{Role: "system", Content: "stale persona"},
+				{Role: "user", Content: "hello"},
+			},
 		},
 	}
 
 	updated, _ := m.handleCommand("/clear-context")
 	got := updated.(Model)
-	if len(got.messages) != 1 {
-		t.Fatalf("expected only confirmation message after clear-context, got %d messages", len(got.messages))
+	if len(got.chat.Messages) != 1 {
+		t.Fatalf("expected only confirmation message after clear-context, got %d messages", len(got.chat.Messages))
 	}
-	if got.messages[0].Role != "assistant" {
-		t.Fatalf("expected confirmation assistant message, got %+v", got.messages[0])
+	if got.chat.Messages[0].Role != "assistant" {
+		t.Fatalf("expected confirmation assistant message, got %+v", got.chat.Messages[0])
 	}
 }
 
 func TestBuildMessagesSkipsTransientToolStatusMessage(t *testing.T) {
 	m := Model{
-		messages: []state.Message{
+		chat: state.ChatState{Messages: []state.Message{
 			{Role: "user", Content: "hello"},
 			{Role: "system", Content: "[TOOL_STATUS] tool=read file=README.md"},
 			{Role: "assistant", Content: "ok"},
-		},
+		}},
 	}
 
 	got := m.buildMessages()
@@ -115,11 +119,11 @@ func TestBuildMessagesSkipsTransientToolStatusMessage(t *testing.T) {
 
 func TestBuildMessagesKeepsOnlyRecentToolContextMessages(t *testing.T) {
 	m := Model{}
-	m.messages = append(m.messages, state.Message{Role: "user", Content: "step 1"})
+	m.chat.Messages = append(m.chat.Messages, state.Message{Role: "user", Content: "step 1"})
 	for i := 1; i <= 5; i++ {
-		m.messages = append(m.messages, state.Message{Role: "system", Content: "[TOOL_CONTEXT]\ntool=read\nsuccess=true\noutput:\nchunk " + string(rune('0'+i))})
+		m.chat.Messages = append(m.chat.Messages, state.Message{Role: "system", Content: "[TOOL_CONTEXT]\ntool=read\nsuccess=true\noutput:\nchunk " + string(rune('0'+i))})
 	}
-	m.messages = append(m.messages, state.Message{Role: "assistant", Content: "done"})
+	m.chat.Messages = append(m.chat.Messages, state.Message{Role: "assistant", Content: "done"})
 
 	got := m.buildMessages()
 	toolCtxCount := 0
@@ -146,20 +150,22 @@ func TestBuildMessagesKeepsOnlyRecentToolContextMessages(t *testing.T) {
 
 func TestWorkspaceCommandShowsWorkspaceRoot(t *testing.T) {
 	m := Model{
-		client:        fakeChatClient{},
-		apiKeyReady:   true,
-		workspaceRoot: `F:/Qiniu/test1`,
+		client: fakeChatClient{},
+		chat: state.ChatState{
+			APIKeyReady:   true,
+			WorkspaceRoot: `F:/Qiniu/test1`,
+		},
 	}
 
 	updated, _ := m.handleCommand("/pwd")
 	got := updated.(Model)
-	if len(got.messages) != 1 {
-		t.Fatalf("expected exactly 1 message, got %d", len(got.messages))
+	if len(got.chat.Messages) != 1 {
+		t.Fatalf("expected exactly 1 message, got %d", len(got.chat.Messages))
 	}
-	if got.messages[0].Role != "assistant" {
-		t.Fatalf("expected assistant message, got %+v", got.messages[0])
+	if got.chat.Messages[0].Role != "assistant" {
+		t.Fatalf("expected assistant message, got %+v", got.chat.Messages[0])
 	}
-	if !strings.Contains(got.messages[0].Content, `F:/Qiniu/test1`) {
-		t.Fatalf("expected workspace path in response, got %q", got.messages[0].Content)
+	if !strings.Contains(got.chat.Messages[0].Content, `F:/Qiniu/test1`) {
+		t.Fatalf("expected workspace path in response, got %q", got.chat.Messages[0].Content)
 	}
 }
