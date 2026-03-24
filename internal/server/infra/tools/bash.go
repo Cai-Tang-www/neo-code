@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -55,7 +56,25 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+
+	var shell string
+	var shellArgs []string
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		// Linux/macOS: 使用 bash
+		shell = "bash"
+		shellArgs = []string{"-lc", command}
+	case "windows":
+		// Windows: 使用 PowerShell
+		shell = "powershell"
+		shellArgs = []string{"-Command", command}
+	default:
+		shell = "bash"
+		shellArgs = []string{"-lc", command}
+	}
+
+	// 使用动态选择的 shell 和参数创建命令
+	cmd := exec.CommandContext(ctx, shell, shellArgs...)
 	cmd.Dir = workdir
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
