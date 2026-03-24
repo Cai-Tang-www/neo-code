@@ -1,8 +1,10 @@
 package core
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	"go-llm-demo/internal/server/domain"
 	"go-llm-demo/internal/server/infra/tools"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func Chunk(content string) tea.Cmd {
@@ -41,6 +43,7 @@ func (StreamErrorMsg) isMsg() {}
 
 type ToolResultMsg struct {
 	Result *tools.ToolResult
+	Call   domain.ToolCall
 }
 
 func (ToolResultMsg) isMsg() {}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go-llm-demo/configs"
+	"go-llm-demo/internal/server/domain"
 	"go-llm-demo/internal/tui/infra"
 
 	"github.com/charmbracelet/bubbles/cursor"
@@ -46,9 +47,10 @@ type Model struct {
 
 	workspaceRoot string
 
-	toolExecuting bool
-	apiKeyReady   bool
-	configPath    string
+	toolExecuting   bool
+	pendingApproval *PendingApproval
+	apiKeyReady     bool
+	configPath      string
 
 	streamChan <-chan string
 	textarea   textarea.Model
@@ -63,6 +65,12 @@ type Message struct {
 	Content   string
 	Timestamp time.Time
 	Streaming bool
+}
+
+type PendingApproval struct {
+	Call     domain.ToolCall
+	ToolType string
+	Target   string
 }
 
 // NewModel 创建 TUI 状态模型。
