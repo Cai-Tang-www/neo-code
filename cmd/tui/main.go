@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"go-llm-demo/configs"
@@ -333,4 +332,3 @@ func loadPersonaPrompt(path string) string {
 
 	return strings.TrimSpace(string(data))
 }
-
