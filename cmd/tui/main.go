@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/infra/provider"
@@ -335,17 +334,3 @@ func loadPersonaPrompt(path string) string {
 	return strings.TrimSpace(string(data))
 }
 
-func setUTF8Mode() {
-	if runtime.GOOS == "windows" {
-		setWindowsUTF8()
-	}
-}
-
-func setWindowsUTF8() {
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	setConsoleOutputCP := kernel32.NewProc("SetConsoleOutputCP")
-	setConsoleCP := kernel32.NewProc("SetConsoleCP")
-
-	setConsoleOutputCP.Call(uintptr(65001))
-	setConsoleCP.Call(uintptr(65001))
-}
