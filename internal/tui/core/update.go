@@ -106,7 +106,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							mu.Unlock()
 							return ToolErrorMsg{Err: fmt.Errorf("工具执行失败: 空返回")}
 						}
-						return ToolResultMsg{Result: result}
+						return ToolResultMsg{Result: result, Call: call}
 					}
 				}
 			}
@@ -163,6 +163,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		mu.Lock()
 		m.toolExecuting = false
 		mu.Unlock()
+
+		if toolType, target, ok := isSecurityAskResult(msg.Result); ok {
+			mu := m.mutex()
+			mu.Lock()
+			m.pendingApproval = &PendingApproval{
+				Call:     msg.Call,
+				ToolType: toolType,
+				Target:   target,
+			}
+			mu.Unlock()
+
+			m.AddMessage("assistant", formatPendingApprovalMessage(m.pendingApproval))
+			m.refreshViewport()
+			return m, nil
+		}
+
 		// 将结构化工具上下文添加为系统消息，然后重新获取AI响应
 		m.AddMessage("system", formatToolContextMessage(msg.Result))
 		m.AddMessage("assistant", "")
@@ -274,6 +290,10 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 		m.AddMessage("assistant", "当前 API Key 未通过校验，请使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置，或 /exit 退出。")
 		return *m, nil
 	}
+	if m.pendingApproval != nil {
+		m.AddMessage("assistant", "当前有待确认的工具调用，请先使用 /y 放行或 /n 拒绝。")
+		return *m, nil
+	}
 
 	m.AddMessage("user", input)
 	m.AddMessage("assistant", "")
@@ -306,6 +326,65 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "/help":
 		m.mode = ModeHelp
+	case "/y":
+		if len(args) > 0 {
+			m.AddMessage("assistant", "用法: /y")
+			return *m, nil
+		}
+		if m.pendingApproval == nil {
+			m.AddMessage("assistant", "当前没有待确认的工具调用。")
+			return *m, nil
+		}
+		pending := *m.pendingApproval
+		m.pendingApproval = nil
+
+		if strings.TrimSpace(pending.Call.Tool) == "" {
+			m.AddMessage("assistant", "待确认工具信息不完整，无法执行。")
+			return *m, nil
+		}
+
+		m.AddMessage("assistant", fmt.Sprintf("已批准，开始执行工具 %s。", pending.Call.Tool))
+		m.AddMessage("system", formatToolStatusMessage(pending.Call.Tool, pending.Call.Params))
+
+		mu := m.mutex()
+		mu.Lock()
+		if m.toolExecuting {
+			mu.Unlock()
+			return *m, nil
+		}
+		m.toolExecuting = true
+		mu.Unlock()
+
+		m.refreshViewport()
+		return *m, func() tea.Msg {
+			tools.ApproveSecurityAsk(pending.ToolType, pending.Target)
+			result := tools.GlobalRegistry.Execute(pending.Call)
+			if result == nil {
+				mu := m.mutex()
+				mu.Lock()
+				m.toolExecuting = false
+				mu.Unlock()
+				return ToolErrorMsg{Err: fmt.Errorf("工具执行失败: 空返回")}
+			}
+			return ToolResultMsg{Result: result, Call: pending.Call}
+		}
+	case "/n":
+		if len(args) > 0 {
+			m.AddMessage("assistant", "用法: /n")
+			return *m, nil
+		}
+		if m.pendingApproval == nil {
+			m.AddMessage("assistant", "当前没有待确认的工具调用。")
+			return *m, nil
+		}
+		pending := *m.pendingApproval
+		m.pendingApproval = nil
+		toolName := strings.TrimSpace(pending.Call.Tool)
+		if toolName == "" {
+			toolName = "unknown"
+		}
+		m.AddMessage("assistant", fmt.Sprintf("已拒绝本次工具调用：%s（目标：%s）", toolName, pending.Target))
+		return *m, nil
 	case "/exit", "/quit", "/q":
 		return *m, tea.Quit
 	case "/apikey":
@@ -486,7 +565,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 
 func isAPIKeyRecoveryCommand(cmd string) bool {
 	switch cmd {
-	case "/apikey", "/provider", "/help", "/switch", "/pwd", "/workspace", "/exit", "/quit", "/q":
+	case "/apikey", "/provider", "/help", "/switch", "/pwd", "/workspace", "/y", "/n", "/exit", "/quit", "/q":
 		return true
 	default:
 		return false
@@ -630,6 +709,38 @@ func formatToolStatusMessage(toolName string, params map[string]interface{}) str
 		detail = " workdir=" + strings.TrimSpace(workdir)
 	}
 	return fmt.Sprintf("%s tool=%s%s", toolStatusPrefix, strings.TrimSpace(toolName), detail)
+}
+
+func isSecurityAskResult(result *tools.ToolResult) (string, string, bool) {
+	if result == nil || result.Success || result.Metadata == nil {
+		return "", "", false
+	}
+	action, _ := result.Metadata["securityAction"].(string)
+	if strings.TrimSpace(strings.ToLower(action)) != string(domain.ActionAsk) {
+		return "", "", false
+	}
+	toolType, _ := result.Metadata["securityToolType"].(string)
+	target, _ := result.Metadata["securityTarget"].(string)
+	if strings.TrimSpace(toolType) == "" || strings.TrimSpace(target) == "" {
+		return "", "", false
+	}
+	return strings.TrimSpace(toolType), strings.TrimSpace(target), true
+}
+
+func formatPendingApprovalMessage(pending *PendingApproval) string {
+	if pending == nil {
+		return "命中安全策略，当前操作需要确认。请使用 /y 或 /n 来确认或拒绝。"
+	}
+	toolName := strings.TrimSpace(pending.Call.Tool)
+	if toolName == "" {
+		toolName = "unknown"
+	}
+	return fmt.Sprintf(
+		"命中安全策略（%s），工具 %s 需要确认后才会执行。\n目标: %s\n输入 /y 临时放行一次，或 /n 拒绝。",
+		pending.ToolType,
+		toolName,
+		pending.Target,
+	)
 }
 
 func formatToolContextMessage(result *tools.ToolResult) string {
