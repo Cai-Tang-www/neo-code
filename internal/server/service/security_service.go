@@ -11,7 +11,8 @@ import (
 )
 
 type SecurityService interface {
-	Check(toolType string, target string) domain.Action
+	domain.SecurityChecker
+	Initialize(configDir string) error
 }
 
 // securityServiceImpl 是 SecurityService 的具体实现
