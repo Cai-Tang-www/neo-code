@@ -7,13 +7,16 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/infra/provider"
+	"go-llm-demo/internal/server/infra/repository"
 	"go-llm-demo/internal/server/infra/tools"
+	"go-llm-demo/internal/server/service"
 	"go-llm-demo/internal/tui/core"
 	"go-llm-demo/internal/tui/infra"
 
@@ -25,6 +28,7 @@ func main() {
 	flag.Parse()
 
 	setUTF8Mode()
+	loadDotEnv(".env")
 
 	workspaceRoot, err := tools.ResolveWorkspaceRoot(*workspaceFlag)
 	if err != nil {
@@ -33,6 +37,10 @@ func main() {
 	}
 	if err := tools.SetWorkspaceRoot(workspaceRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "设置工作区失败: %v\n", err)
+		os.Exit(1)
+	}
+	if err := initializeSecurity(filepath.Join(workspaceRoot, "configs", "security")); err != nil {
+		fmt.Fprintf(os.Stderr, "初始化安全策略失败: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -75,6 +83,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "运行失败: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func initializeSecurity(configDir string) error {
+	securityRepo := repository.NewSecurityConfigRepository()
+	securitySvc := service.NewSecurityService(securityRepo)
+	if err := securitySvc.Initialize(configDir); err != nil {
+		return err
+	}
+	tools.SetSecurityChecker(securitySvc)
+	return nil
 }
 
 func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, configPath string) (bool, error) {
