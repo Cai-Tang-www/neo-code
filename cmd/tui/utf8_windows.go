@@ -2,13 +2,20 @@
 
 package main
 
-import "syscall"
+import (
+	"fmt"
+	"os"
+
+	"golang.org/x/sys/windows"
+)
+
+const utf8CodePage = 65001
 
 func setUTF8Mode() {
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	setConsoleOutputCP := kernel32.NewProc("SetConsoleOutputCP")
-	setConsoleCP := kernel32.NewProc("SetConsoleCP")
-
-	setConsoleOutputCP.Call(uintptr(65001))
-	setConsoleCP.Call(uintptr(65001))
+	if err := windows.SetConsoleOutputCP(utf8CodePage); err != nil {
+		fmt.Fprintf(os.Stderr, "警告: 设置控制台输出编码失败: %v\n", err)
+	}
+	if err := windows.SetConsoleCP(utf8CodePage); err != nil {
+		fmt.Fprintf(os.Stderr, "警告: 设置控制台输入编码失败: %v\n", err)
+	}
 }
