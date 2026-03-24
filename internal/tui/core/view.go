@@ -70,16 +70,10 @@ func countLines(s string) int {
 }
 
 func (m Model) renderInputArea() string {
-	helpText := "[Enter换行 F5/F8发送 PgUp/PgDn滚动]"
-	if !m.generating {
-		helpText = "[Enter换行 F5/F8发送 Ctrl+V粘贴 PgUp/PgDn滚动]"
-	}
-
-	footer := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#5C6370")).
-		Render(helpText)
-
-	return m.textarea.View() + "\n" + footer
+	return components.InputBox{
+		Body:       m.textarea.View(),
+		Generating: m.generating,
+	}.Render()
 }
 
 func (m Model) renderChatContent() string {
