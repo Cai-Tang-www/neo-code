@@ -74,11 +74,14 @@ func (m Model) renderInputArea() string {
 	return components.InputBox{
 		Body:       m.textarea.View(),
 		Generating: m.chat.Generating,
+		Status:     m.ui.CopyStatus,
 	}.Render()
 }
 
-func (m Model) renderChatContent() string {
-	return components.MessageList{Messages: m.toComponentMessages(), Width: m.viewport.Width}.Render()
+func (m *Model) renderChatContent() string {
+	layout := components.MessageList{Messages: m.toComponentMessages(), Width: m.viewport.Width}.RenderLayout()
+	m.chatLayout = layout
+	return layout.Content
 }
 
 func (m Model) toComponentMessages() []components.Message {

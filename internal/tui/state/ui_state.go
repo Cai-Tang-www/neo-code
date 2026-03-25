@@ -15,4 +15,5 @@ type UIState struct {
 	Mode       Mode
 	Focused    string
 	AutoScroll bool
+	CopyStatus string
 }
