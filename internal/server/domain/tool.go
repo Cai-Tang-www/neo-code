@@ -14,14 +14,14 @@ type ToolCall struct {
 type ToolName string
 
 const (
-	ToolRead     ToolName = "read"
-	ToolWrite    ToolName = "write"
-	ToolEdit     ToolName = "edit"
-	ToolBash     ToolName = "bash"
-	ToolList     ToolName = "list"
-	ToolGrep     ToolName = "grep"
-	ToolWebFetch ToolName = "webfetch"
-	ToolTodo     ToolName = "todo"
+	ToolRead     ToolName = "Read"
+	ToolWrite    ToolName = "Write"
+	ToolEdit     ToolName = "Edit"
+	ToolBash     ToolName = "Bash"
+	ToolList     ToolName = "List"
+	ToolGrep     ToolName = "Grep"
+	ToolWebFetch ToolName = "Webfetch"
+	ToolTodo     ToolName = "Todo"
 )
 
 func ParseToolName(input string) (ToolName, bool) {
