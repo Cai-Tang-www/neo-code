@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -346,6 +347,10 @@ func buildMemoryText(userInput, assistantReply string) string {
 }
 
 func deriveMemoryItems(userInput, assistantReply string) []domain.MemoryItem {
+	if shouldSkipMemoryCapture(userInput, assistantReply) {
+		return nil
+	}
+
 	now := time.Now().UTC()
 	items := make([]domain.MemoryItem, 0, 4)
 
@@ -379,7 +384,7 @@ func extractSessionMemory(userInput, assistantReply string, now time.Time) (doma
 		summary = domain.SummarizeText(assistantReply, 140)
 	}
 
-	return newMemoryItem(now, domain.TypeSessionMemory, domain.ScopeSession, summary, assistantReply, combined, 0.66), true
+	return newMemoryItem(now, domain.TypeSessionMemory, domain.ScopeSession, summary, assistantReply, userInput, assistantReply, combined, 0.66), true
 }
 
 func extractPreferenceMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
@@ -389,7 +394,7 @@ func extractPreferenceMemory(userInput, assistantReply string, now time.Time) (d
 	}
 
 	summary := domain.SummarizeText(trimmed, 140)
-	return newMemoryItem(now, domain.TypeUserPreference, domain.ScopeUser, summary, assistantReply, buildMemoryText(userInput, assistantReply), 0.95), true
+	return newMemoryItem(now, domain.TypeUserPreference, domain.ScopeUser, summary, assistantReply, userInput, assistantReply, buildMemoryText(userInput, assistantReply), 0.95), true
 }
 
 func extractProjectRuleMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
@@ -397,11 +402,14 @@ func extractProjectRuleMemory(userInput, assistantReply string, now time.Time) (
 	if !looksLikeProjectFact(userInput, assistantReply) {
 		return domain.MemoryItem{}, false
 	}
-	if !containsAnyFold(combined, "config.yaml", "readme", "go test", "go build", "命令", "约定", "配置", "目录", "结构", "仓库") {
+	if looksLikeStableInstruction(userInput) && !hasProjectRuleAnchor(combined) {
+		return domain.MemoryItem{}, false
+	}
+	if !hasProjectRuleSignal(combined) {
 		return domain.MemoryItem{}, false
 	}
 	summary := domain.SummarizeText(firstNonEmptyLine(userInput, assistantReply), 140)
-	return newMemoryItem(now, domain.TypeProjectRule, domain.ScopeProject, summary, assistantReply, buildMemoryText(userInput, assistantReply), 0.9), true
+	return newMemoryItem(now, domain.TypeProjectRule, domain.ScopeProject, summary, assistantReply, userInput, assistantReply, buildMemoryText(userInput, assistantReply), 0.9), true
 }
 
 func extractCodeFactMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
@@ -413,7 +421,7 @@ func extractCodeFactMemory(userInput, assistantReply string, now time.Time) (dom
 		return domain.MemoryItem{}, false
 	}
 	summary := domain.SummarizeText(firstNonEmptyLine(assistantReply, userInput), 140)
-	return newMemoryItem(now, domain.TypeCodeFact, domain.ScopeProject, summary, assistantReply, combined, 0.82), true
+	return newMemoryItem(now, domain.TypeCodeFact, domain.ScopeProject, summary, assistantReply, userInput, assistantReply, combined, 0.82), true
 }
 
 func extractFixRecipeMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
@@ -428,23 +436,24 @@ func extractFixRecipeMemory(userInput, assistantReply string, now time.Time) (do
 	if details == "" {
 		details = userInput
 	}
-	return newMemoryItem(now, domain.TypeFixRecipe, domain.ScopeProject, summary, details, buildMemoryText(userInput, assistantReply), 0.8), true
+	return newMemoryItem(now, domain.TypeFixRecipe, domain.ScopeProject, summary, details, userInput, assistantReply, buildMemoryText(userInput, assistantReply), 0.8), true
 }
 
-func newMemoryItem(now time.Time, itemType, scope, summary, details, text string, confidence float64) domain.MemoryItem {
+func newMemoryItem(now time.Time, itemType, scope, summary, details, userInput, assistantReply, text string, confidence float64) domain.MemoryItem {
 	item := domain.MemoryItem{
-		ID:         strconv.FormatInt(now.UnixNano(), 10) + "-" + itemType,
-		Type:       itemType,
-		Summary:    strings.TrimSpace(summary),
-		Details:    domain.SummarizeText(details, 220),
-		Scope:      scope,
-		Tags:       domain.InferTags(summary + "\n" + details),
-		Source:     "conversation",
-		Confidence: confidence,
-		Text:       strings.TrimSpace(text),
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		UserInput:  strings.TrimSpace(summary),
+		ID:             strconv.FormatInt(now.UnixNano(), 10) + "-" + itemType,
+		Type:           itemType,
+		Summary:        strings.TrimSpace(summary),
+		Details:        domain.SummarizeText(details, 220),
+		Scope:          scope,
+		Tags:           domain.InferTags(summary + "\n" + details),
+		Source:         "conversation",
+		Confidence:     confidence,
+		Text:           strings.TrimSpace(text),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		UserInput:      strings.TrimSpace(userInput),
+		AssistantReply: strings.TrimSpace(assistantReply),
 	}
 	return item.Normalized()
 }
@@ -462,7 +471,7 @@ func isCodingRelevant(userInput, assistantReply string) bool {
 
 func looksLikeProjectFact(userInput, assistantReply string) bool {
 	combined := strings.ToLower(buildMemoryText(userInput, assistantReply))
-	return containsAnyFold(combined, "config.yaml", "readme", "go test", "go build", "项目", "仓库", "约定", "配置", "结构", "命令", "services/", "memory/", "main.go")
+	return hasProjectRuleAnchor(combined) && hasProjectRuleSignal(combined)
 }
 
 func looksLikeCodeKnowledge(userInput, assistantReply string) bool {
@@ -498,6 +507,54 @@ func looksLikeStableInstruction(text string) bool {
 		return false
 	}
 	return containsAnyFold(trimmed, "config.yaml", ".env", "中文", "提交", "命令", "风格", "配置")
+}
+
+func shouldSkipMemoryCapture(userInput, assistantReply string) bool {
+	trimmedUser := strings.TrimSpace(userInput)
+	trimmedReply := strings.TrimSpace(assistantReply)
+	if trimmedUser == "" || trimmedReply == "" {
+		return true
+	}
+	return looksLikeToolCallPayload(trimmedReply)
+}
+
+func looksLikeToolCallPayload(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+		return false
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return false
+	}
+
+	toolValue, hasTool := payload["tool"]
+	paramsValue, hasParams := payload["params"]
+	if !hasTool || !hasParams {
+		return false
+	}
+
+	var toolName string
+	if err := json.Unmarshal(toolValue, &toolName); err != nil {
+		return false
+	}
+
+	var params map[string]interface{}
+	return strings.TrimSpace(toolName) != "" && json.Unmarshal(paramsValue, &params) == nil
+}
+
+func hasProjectRuleAnchor(text string) bool {
+	return containsAnyFold(text,
+		"config.yaml", "readme", "go test", "go build",
+		"cmd/", "internal/", "configs/", "services/", "memory/", "main.go",
+		"data/", "workspace", "工作区", "根目录", "主配置文件", "文件", "路径")
+}
+
+func hasProjectRuleSignal(text string) bool {
+	return containsAnyFold(text,
+		"项目", "仓库", "约定", "配置", "结构", "目录", "命令",
+		"默认", "统一", "必须", "需要", "测试命令", "构建命令")
 }
 
 func containsAnyFold(text string, needles ...string) bool {
