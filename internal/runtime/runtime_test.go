@@ -351,6 +351,75 @@ func TestServiceTrimMessagesPreservesToolPairs(t *testing.T) {
 	}
 }
 
+func TestServiceTrimMessagesBoundaries(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	service := NewWithFactory(manager, tools.NewRegistry(), newMemoryStore(), &scriptedProviderFactory{provider: &scriptedProvider{name: "noop"}})
+
+	tests := []struct {
+		name    string
+		input   []provider.Message
+		wantLen int
+		assert  func(t *testing.T, original []provider.Message, trimmed []provider.Message)
+	}{
+		{
+			name: "within max turns returns full cloned slice",
+			input: []provider.Message{
+				{Role: "user", Content: "one"},
+				{Role: "assistant", Content: "two"},
+			},
+			wantLen: 2,
+			assert: func(t *testing.T, original []provider.Message, trimmed []provider.Message) {
+				t.Helper()
+				if &trimmed[0] == &original[0] {
+					t.Fatalf("expected trimmed slice to be cloned")
+				}
+			},
+		},
+		{
+			name: "long message list with limited spans keeps full history",
+			input: func() []provider.Message {
+				messages := make([]provider.Message, 0, maxContextTurns+3)
+				for i := 0; i < maxContextTurns-1; i++ {
+					messages = append(messages, provider.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
+				}
+				messages = append(messages,
+					provider.Message{
+						Role: "assistant",
+						ToolCalls: []provider.ToolCall{
+							{ID: "call-1", Name: "filesystem_edit", Arguments: "{}"},
+						},
+					},
+					provider.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-1"},
+					provider.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-2"},
+				)
+				return messages
+			}(),
+			wantLen: maxContextTurns + 2,
+			assert: func(t *testing.T, original []provider.Message, trimmed []provider.Message) {
+				t.Helper()
+				if len(trimmed) != len(original) {
+					t.Fatalf("expected full history to remain, got %d want %d", len(trimmed), len(original))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			trimmed := service.trimMessages(tt.input)
+			if len(trimmed) != tt.wantLen {
+				t.Fatalf("expected len %d, got %d", tt.wantLen, len(trimmed))
+			}
+			if tt.assert != nil {
+				tt.assert(t, tt.input, trimmed)
+			}
+		})
+	}
+}
+
 func TestServiceRunErrorPaths(t *testing.T) {
 	tests := []struct {
 		name         string

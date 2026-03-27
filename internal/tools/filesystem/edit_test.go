@@ -116,3 +116,29 @@ func TestEditToolExecute(t *testing.T) {
 		})
 	}
 }
+
+func TestEditToolSearchStringNotFound(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "main.go"), "package main\n")
+
+	tool := NewEdit(workspace)
+	args, err := json.Marshal(map[string]string{
+		"path":           "main.go",
+		"search_string":  "missing-block",
+		"replace_string": "new-block",
+	})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+
+	_, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: args,
+		Workdir:   workspace,
+	})
+	if execErr == nil || !strings.Contains(execErr.Error(), "search_string not found") {
+		t.Fatalf("expected search_string not found error, got %v", execErr)
+	}
+}

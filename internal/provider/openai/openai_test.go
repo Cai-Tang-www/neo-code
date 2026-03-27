@@ -378,6 +378,26 @@ func TestParseErrorAndEmitTextDelta(t *testing.T) {
 	}
 }
 
+func TestProviderConsumeStreamRejectsDirtyJSON(t *testing.T) {
+	t.Parallel()
+
+	provider, err := New(config.ProviderConfig{
+		Name:      config.ProviderOpenAI,
+		Type:      config.ProviderOpenAI,
+		BaseURL:   config.DefaultOpenAIBaseURL,
+		Model:     config.DefaultOpenAIModel,
+		APIKeyEnv: config.DefaultOpenAIAPIKeyEnv,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, err = provider.consumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan domain.StreamEvent, 1))
+	if err == nil || !strings.Contains(err.Error(), "decode stream chunk") {
+		t.Fatalf("expected dirty JSON decode error, got %v", err)
+	}
+}
+
 func containsToolRoleMessage(messages []openAIMessage, toolCallID string, content string) bool {
 	for _, message := range messages {
 		if message.Role == "tool" && message.ToolCallID == toolCallID && message.Content == content {

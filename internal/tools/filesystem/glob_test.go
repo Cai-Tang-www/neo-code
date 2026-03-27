@@ -97,3 +97,12 @@ func TestGlobToolExecute(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildGlobMatcherRejectsInvalidUTF8(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildGlobMatcher(string([]byte{0xff}))
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "utf-8") {
+		t.Fatalf("expected invalid utf-8 error, got %v", err)
+	}
+}

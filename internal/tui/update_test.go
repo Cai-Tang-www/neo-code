@@ -786,6 +786,37 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 	}
 }
 
+func TestAppRefreshErrorPaths(t *testing.T) {
+	t.Run("refresh sessions returns runtime error", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		runtime.listErr = context.DeadlineExceeded
+
+		app, err := New(nil, manager, runtime)
+		if err == nil || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+			t.Fatalf("expected list session error during New, got %v", err)
+		}
+		_ = app
+	})
+
+	t.Run("refresh messages returns load error", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		runtime.loadErr = context.Canceled
+
+		app, err := New(nil, manager, runtime)
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		app.state.ActiveSessionID = "broken"
+
+		err = app.refreshMessages()
+		if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+			t.Fatalf("expected load session error, got %v", err)
+		}
+	})
+}
+
 func newTestConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
 	manager := config.NewManager(config.NewLoader(t.TempDir()))
