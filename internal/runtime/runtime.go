@@ -779,16 +779,17 @@ func (s *Service) isRunCanceled(err error) bool {
 }
 
 type permissionEventView struct {
-	toolName   string
-	actionType string
-	operation  string
-	targetType string
-	target     string
-	decision   string
-	reason     string
-	ruleID     string
-	scope      string
-	resolvedAs string
+	toolName     string
+	toolCategory string
+	actionType   string
+	operation    string
+	targetType   string
+	target       string
+	decision     string
+	reason       string
+	ruleID       string
+	scope        string
+	resolvedAs   string
 }
 
 // permissionEventFromError 从工具权限错误中提取可用于 runtime 事件的结构化信息。
@@ -811,16 +812,17 @@ func permissionEventFromError(err error) (permissionEventView, bool) {
 	}
 
 	return permissionEventView{
-		toolName:   action.Payload.ToolName,
-		actionType: string(action.Type),
-		operation:  action.Payload.Operation,
-		targetType: string(action.Payload.TargetType),
-		target:     action.Payload.Target,
-		decision:   decision,
-		reason:     reason,
-		ruleID:     strings.TrimSpace(permissionErr.RuleID()),
-		scope:      strings.TrimSpace(permissionErr.RememberScope()),
-		resolvedAs: resolvedAs,
+		toolName:     action.Payload.ToolName,
+		toolCategory: permissionToolCategory(action),
+		actionType:   string(action.Type),
+		operation:    action.Payload.Operation,
+		targetType:   string(action.Payload.TargetType),
+		target:       action.Payload.Target,
+		decision:     decision,
+		reason:       reason,
+		ruleID:       strings.TrimSpace(permissionErr.RuleID()),
+		scope:        strings.TrimSpace(permissionErr.RememberScope()),
+		resolvedAs:   resolvedAs,
 	}, true
 }
 
@@ -828,6 +830,7 @@ func permissionEventFromError(err error) (permissionEventView, bool) {
 func (v permissionEventView) toRequestPayload() PermissionRequestPayload {
 	return PermissionRequestPayload{
 		ToolName:      v.toolName,
+		ToolCategory:  v.toolCategory,
 		ActionType:    v.actionType,
 		Operation:     v.operation,
 		TargetType:    v.targetType,
@@ -843,6 +846,7 @@ func (v permissionEventView) toRequestPayload() PermissionRequestPayload {
 func (v permissionEventView) toResolvedPayload() PermissionResolvedPayload {
 	return PermissionResolvedPayload{
 		ToolName:      v.toolName,
+		ToolCategory:  v.toolCategory,
 		ActionType:    v.actionType,
 		Operation:     v.operation,
 		TargetType:    v.targetType,
