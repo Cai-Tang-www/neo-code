@@ -120,27 +120,7 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 		return result, execErr
 	}
 	if !strings.EqualFold(permissionErr.Decision(), string(security.DecisionAsk)) {
-		reason := strings.TrimSpace(permissionErr.Reason())
-		if reason == "" {
-			reason = strings.TrimSpace(execErr.Error())
-		}
-		s.emit(ctx, EventPermissionResolved, input.RunID, input.SessionID, PermissionResolvedPayload{
-			ToolCallID:    input.Call.ID,
-			ToolName:      input.Call.Name,
-			ToolCategory:  permissionToolCategory(permissionErr.Action()),
-			ActionType:    string(permissionErr.Action().Type),
-			Operation:     permissionErr.Action().Payload.Operation,
-			TargetType:    string(permissionErr.Action().Payload.TargetType),
-			Target:        permissionErr.Action().Payload.Target,
-			Decision:      strings.ToLower(strings.TrimSpace(permissionErr.Decision())),
-			Reason:        reason,
-			RuleID:        strings.TrimSpace(permissionErr.RuleID()),
-			RememberScope: strings.TrimSpace(permissionErr.RememberScope()),
-			ResolvedAs:    "denied",
-		})
-
-		// 返回非 PermissionDecisionError，避免 runtime 主循环重复发射 permission_resolved 事件。
-		return result, errors.New(strings.TrimSpace(execErr.Error()))
+		return result, execErr
 	}
 
 	decision, scope, requestID, err := s.awaitPermissionDecision(ctx, input, permissionErr)

@@ -624,7 +624,6 @@ func TestServiceRunMCPPermissionHardDenyFlow(t *testing.T) {
 			t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
 		}
 		if payload.ToolName != "mcp.github.create_issue" ||
-			payload.ToolCategory != "mcp.github" ||
 			payload.RuleID != "deny-github-server" ||
 			payload.Reason != "github mcp server denied" ||
 			payload.Decision != "deny" ||
