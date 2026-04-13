@@ -47,8 +47,8 @@ func NewBuilderWithMemo(policies MicroCompactPolicySource, memoSource SectionSou
 		sources = append(sources, memoSource)
 	}
 	return &DefaultBuilder{
-		promptSources:       sources,
-		trimPolicy:          spanMessageTrimPolicy{},
+		promptSources:        sources,
+		trimPolicy:           spanMessageTrimPolicy{},
 		microCompactPolicies: policies,
 	}
 }

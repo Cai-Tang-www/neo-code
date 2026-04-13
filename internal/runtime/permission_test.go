@@ -850,6 +850,7 @@ func TestExecuteToolCallWithPermissionDoesNotRecheckContextAfterSuccessfulEmit(t
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	service.events = make(chan RuntimeEvent, 1)
 
 	result, execErr := service.executeToolCallWithPermission(ctx, permissionExecutionInput{
