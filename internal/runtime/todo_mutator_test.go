@@ -279,8 +279,15 @@ func TestRuntimeSessionMutatorMethods(t *testing.T) {
 	if failed.Status != agentsession.TodoStatusFailed || failed.FailureReason != "failed reason" {
 		t.Fatalf("FailTodo() not applied, got %+v", failed)
 	}
+	if err := mutator.RetryTodo("c", failed.Revision); err != nil {
+		t.Fatalf("RetryTodo() error = %v", err)
+	}
+	retried, _ := mutator.FindTodo("c")
+	if retried.Status != agentsession.TodoStatusPending || retried.RetryCount != 0 {
+		t.Fatalf("RetryTodo() not applied, got %+v", retried)
+	}
 
-	if err := mutator.DeleteTodo("c", failed.Revision); err != nil {
+	if err := mutator.DeleteTodo("c", retried.Revision); err != nil {
 		t.Fatalf("DeleteTodo(c) error = %v", err)
 	}
 	if _, ok := mutator.FindTodo("c"); ok {

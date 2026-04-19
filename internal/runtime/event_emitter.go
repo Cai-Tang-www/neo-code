@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"neo-code/internal/runtime/controlplane"
@@ -50,10 +51,21 @@ func (s *Service) emitWithEnvelope(ctx context.Context, evt RuntimeEvent) error 
 	if evt.Timestamp.IsZero() {
 		evt.Timestamp = time.Now()
 	}
+	if evt.Sequence == 0 {
+		evt.Sequence = s.nextEventSequence()
+	}
 	if err := s.deliverEvent(ctx, evt); err != nil {
 		return err
 	}
 	return nil
+}
+
+// nextEventSequence 生成单个 Service 实例内严格递增的事件序号，便于消费端做乱序/重复校验。
+func (s *Service) nextEventSequence() uint64 {
+	if s == nil {
+		return 0
+	}
+	return atomic.AddUint64(&s.eventSequence, 1)
 }
 
 func (s *Service) deliverEvent(ctx context.Context, evt RuntimeEvent) error {

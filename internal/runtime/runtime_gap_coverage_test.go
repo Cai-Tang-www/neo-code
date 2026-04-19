@@ -299,6 +299,21 @@ func TestPermissionHelperAndAwaitBranches(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled while waiting permission, got %v", err)
 	}
+
+	timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer timeoutCancel()
+	_, _, err = service.awaitPermissionDecision(
+		timeoutCtx,
+		permissionExecutionInput{
+			RunID:     "r",
+			SessionID: "s",
+			Call:      providertypes.ToolCall{ID: "d", Name: "filesystem_read_file"},
+		},
+		permissionErr,
+	)
+	if !errors.Is(err, errPermissionApprovalPending) {
+		t.Fatalf("expected approval pending timeout error, got %v", err)
+	}
 }
 
 func TestAcquireSessionLockReleasesAndCleansUp(t *testing.T) {

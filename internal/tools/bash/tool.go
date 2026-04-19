@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"neo-code/internal/tools"
@@ -49,6 +51,17 @@ func (t *Tool) Name() string {
 }
 
 func (t *Tool) Description() string {
+	shell := strings.ToLower(strings.TrimSpace(t.shell))
+	switch shell {
+	case "powershell", "pwsh":
+		return "Execute a shell command inside the workspace with timeout and bounded output. " +
+			"The command must use PowerShell syntax in this environment."
+	case "bash", "sh":
+		return fmt.Sprintf(
+			"Execute a shell command inside the workspace with timeout and bounded output using %s syntax.",
+			shell,
+		)
+	}
 	return "Execute a shell command inside the workspace with timeout and bounded output."
 }
 
@@ -58,7 +71,7 @@ func (t *Tool) Schema() map[string]any {
 		"properties": map[string]any{
 			"command": map[string]any{
 				"type":        "string",
-				"description": "Shell command to execute.",
+				"description": t.commandDescription(),
 			},
 			"workdir": map[string]any{
 				"type":        "string",
@@ -66,6 +79,19 @@ func (t *Tool) Schema() map[string]any {
 			},
 		},
 		"required": []string{"command"},
+	}
+}
+
+// commandDescription 生成与当前 shell 对齐的命令描述，减少模型混用命令方言。
+func (t *Tool) commandDescription() string {
+	shell := strings.ToLower(strings.TrimSpace(t.shell))
+	switch shell {
+	case "powershell", "pwsh":
+		return "PowerShell command to execute. Do not use bash operators like &&, ||, mkdir -p, ls, cat <<EOF."
+	case "bash", "sh":
+		return fmt.Sprintf("%s command to execute.", shell)
+	default:
+		return "Shell command to execute."
 	}
 }
 

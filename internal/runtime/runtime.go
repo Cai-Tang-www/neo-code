@@ -121,6 +121,7 @@ type Service struct {
 	autoCompactThresholdResolver AutoCompactThresholdResolver
 
 	events             chan RuntimeEvent
+	eventSequence      uint64
 	sessionMu          sync.Mutex
 	sessionLocks       map[string]*sessionLockEntry
 	runMu              sync.Mutex

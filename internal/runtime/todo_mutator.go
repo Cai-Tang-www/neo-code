@@ -76,6 +76,13 @@ func (m *runtimeSessionMutator) SetTodoStatus(id string, status agentsession.Tod
 	})
 }
 
+// RetryTodo 将 failed Todo 受控恢复为 pending，并立即持久化。
+func (m *runtimeSessionMutator) RetryTodo(id string, expectedRevision int64) error {
+	return m.mutateAndSave(func(session *agentsession.Session) error {
+		return session.RetryTodo(id, expectedRevision)
+	})
+}
+
 // DeleteTodo 删除 Todo 并立即持久化。
 func (m *runtimeSessionMutator) DeleteTodo(id string, expectedRevision int64) error {
 	return m.mutateAndSave(func(session *agentsession.Session) error {

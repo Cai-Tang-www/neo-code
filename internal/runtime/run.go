@@ -69,8 +69,7 @@ func computeTodoStateSignature(items []agentsession.TodoItem) string {
 // Run 执行一次完整的 ReAct 闭环：保存用户输入、驱动模型、执行工具并发出事件。
 // 已有会话会先加锁再加载/更新，确保同一会话并发 Run 不会出现状态覆盖；
 // 新会话在创建后再绑定会话锁，不同会话可并行执行。
-// 当前实现不再设置内部轮数上限，因此 Run 仅在拿到最终 assistant 回复、遇到错误或收到外部取消时结束。
-// 这也意味着同一 session 的锁会覆盖整个运行周期，调用方需要依赖模型终止条件或取消机制兜底。
+// Run 同时受内部最大轮次上限约束，避免 provider 长时间无收敛时占用会话锁与持续消耗成本。
 func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	var statePtr *runState
 
@@ -119,6 +118,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 
 	for turn := 0; ; turn++ {
+		if turn >= resolveRunMaxTurn(s.configManager.Get().Runtime) {
+			return ErrMaxTurnLimit
+		}
 		state.turn = turn
 		s.transitionRunPhase(ctx, &state, controlplane.PhasePlan)
 
@@ -346,6 +348,14 @@ func resolveNoProgressStreakLimit(rc config.RuntimeConfig) int {
 		return config.DefaultMaxNoProgressStreak
 	}
 	return rc.MaxNoProgressStreak
+}
+
+// resolveRunMaxTurn 统一解析单次 Run 最大轮次，避免非法配置导致死循环保护失效。
+func resolveRunMaxTurn(rc config.RuntimeConfig) int {
+	if rc.MaxTurn <= 0 {
+		return config.DefaultMaxTurn
+	}
+	return rc.MaxTurn
 }
 
 // resolveRepeatCycleStreakLimit 统一解析重复调用循环阈值。

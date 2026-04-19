@@ -17,8 +17,10 @@ func TestTodoStatusValidAndTransition(t *testing.T) {
 		ok   bool
 	}{
 		{name: "pending to in_progress", from: TodoStatusPending, to: TodoStatusInProgress, ok: true},
+		{name: "pending to failed", from: TodoStatusPending, to: TodoStatusFailed, ok: true},
 		{name: "in_progress to completed", from: TodoStatusInProgress, to: TodoStatusCompleted, ok: true},
 		{name: "blocked to canceled", from: TodoStatusBlocked, to: TodoStatusCanceled, ok: true},
+		{name: "blocked to failed", from: TodoStatusBlocked, to: TodoStatusFailed, ok: true},
 		{name: "completed to pending denied", from: TodoStatusCompleted, to: TodoStatusPending, ok: false},
 		{name: "failed to in_progress denied", from: TodoStatusFailed, to: TodoStatusInProgress, ok: false},
 		{name: "canceled to completed denied", from: TodoStatusCanceled, to: TodoStatusCompleted, ok: false},
@@ -240,6 +242,72 @@ func TestSessionClaimCompleteFail(t *testing.T) {
 	}
 }
 
+func TestSessionRetryTodo(t *testing.T) {
+	t.Parallel()
+
+	session := New("retry")
+	if err := session.AddTodo(TodoItem{
+		ID:            "task",
+		Content:       "task",
+		Status:        TodoStatusFailed,
+		OwnerType:     TodoOwnerTypeSubAgent,
+		OwnerID:       "worker-1",
+		Artifacts:     []string{"tmp.log"},
+		FailureReason: "boom",
+		RetryCount:    3,
+		RetryLimit:    5,
+		NextRetryAt:   time.Now().Add(5 * time.Minute),
+	}); err != nil {
+		t.Fatalf("AddTodo(task) error = %v", err)
+	}
+
+	item, _ := session.FindTodo("task")
+	if err := session.RetryTodo("task", item.Revision); err != nil {
+		t.Fatalf("RetryTodo(task) error = %v", err)
+	}
+
+	retried, _ := session.FindTodo("task")
+	if retried.Status != TodoStatusPending {
+		t.Fatalf("status = %q, want pending", retried.Status)
+	}
+	if retried.OwnerType != "" || retried.OwnerID != "" {
+		t.Fatalf("owner should be cleared, got %s/%s", retried.OwnerType, retried.OwnerID)
+	}
+	if len(retried.Artifacts) != 0 {
+		t.Fatalf("artifacts should be cleared, got %v", retried.Artifacts)
+	}
+	if retried.FailureReason != "" || !retried.NextRetryAt.IsZero() {
+		t.Fatalf("failure fields should be cleared, got %+v", retried)
+	}
+	if retried.RetryCount != 0 {
+		t.Fatalf("retry_count = %d, want 0", retried.RetryCount)
+	}
+	if retried.RetryLimit != 5 {
+		t.Fatalf("retry_limit = %d, want 5", retried.RetryLimit)
+	}
+}
+
+func TestSessionRetryTodoErrors(t *testing.T) {
+	t.Parallel()
+
+	session := New("retry-errors")
+	if err := session.AddTodo(TodoItem{ID: "a", Content: "a", Status: TodoStatusPending}); err != nil {
+		t.Fatalf("AddTodo(a) error = %v", err)
+	}
+	if err := session.RetryTodo("missing", 0); err == nil || !errors.Is(err, ErrTodoNotFound) {
+		t.Fatalf("RetryTodo(missing) error = %v, want not found", err)
+	}
+	if err := session.RetryTodo("a", 1); err == nil || !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("RetryTodo(a,pending) error = %v, want invalid transition", err)
+	}
+	if err := session.FailTodo("a", "boom", 1); err != nil {
+		t.Fatalf("FailTodo(a) error = %v", err)
+	}
+	if err := session.RetryTodo("a", 1); err == nil || !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("RetryTodo(a) with stale revision error = %v, want revision conflict", err)
+	}
+}
+
 func TestTodoVersionLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -342,6 +410,9 @@ func TestSessionNilReceiverErrors(t *testing.T) {
 	if err := session.UpdateTodo("a", TodoPatch{}, 0); err == nil {
 		t.Fatalf("UpdateTodo nil receiver should fail")
 	}
+	if err := session.RetryTodo("a", 0); err == nil {
+		t.Fatalf("RetryTodo nil receiver should fail")
+	}
 	if err := session.DeleteTodo("a", 0); err == nil {
 		t.Fatalf("DeleteTodo nil receiver should fail")
 	}
@@ -382,6 +453,7 @@ func TestTodoInternalHelpers(t *testing.T) {
 		FailureReason: " retry failed ",
 		RetryCount:    -3,
 		RetryLimit:    -2,
+		NextRetryAt:   time.Now().Add(2 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("normalizeTodoItem error = %v", err)
@@ -391,6 +463,9 @@ func TestTodoInternalHelpers(t *testing.T) {
 	}
 	if normalized.RetryCount != 0 || normalized.RetryLimit != 0 {
 		t.Fatalf("negative retry fields should be normalized to 0, got count=%d limit=%d", normalized.RetryCount, normalized.RetryLimit)
+	}
+	if normalized.NextRetryAt.IsZero() {
+		t.Fatalf("blocked todo should keep next_retry_at")
 	}
 
 	legacySubAgent, err := normalizeTodoItem(TodoItem{
@@ -480,6 +555,9 @@ func TestApplyTodoPatchCoverage(t *testing.T) {
 	}
 	if blockedNext.FailureReason != blockedReason {
 		t.Fatalf("blocked status should preserve failure reason, got %q", blockedNext.FailureReason)
+	}
+	if !blockedNext.NextRetryAt.IsZero() {
+		t.Fatalf("blocked patch without next_retry_at should keep zero value, got %+v", blockedNext.NextRetryAt)
 	}
 
 	invalidStatus := TodoStatus("paused")

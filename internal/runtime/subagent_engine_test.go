@@ -662,6 +662,7 @@ func newRuntimeSubAgentStepInput(
 type failingToolExecutor struct {
 	err      error
 	decision string
+	isError  bool
 }
 
 func (f failingToolExecutor) ListToolSpecs(
@@ -687,6 +688,6 @@ func (f failingToolExecutor) ExecuteTool(
 		Name:     "filesystem_read_file",
 		Content:  "",
 		Decision: decision,
-		IsError:  true,
+		IsError:  f.isError,
 	}, f.err
 }

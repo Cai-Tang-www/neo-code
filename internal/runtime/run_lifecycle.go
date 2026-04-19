@@ -18,6 +18,9 @@ var ErrNoProgressStreakLimit = errors.New("runtime: no progress streak limit rea
 // ErrRepeatCycleLimit 表示连续多次重复调用相同的工具且参数相同，触发死循环拦截。
 var ErrRepeatCycleLimit = errors.New("runtime: repeat cycle limit reached")
 
+// ErrMaxTurnLimit 表示单次 Run 达到最大轮次上限，触发硬性停止。
+var ErrMaxTurnLimit = errors.New("runtime: max turn limit reached")
+
 // transitionRunPhase 在阶段变化时发出 phase_changed 并更新 runState。
 func (s *Service) transitionRunPhase(ctx context.Context, state *runState, next controlplane.Phase) {
 	if state == nil || state.phase == next {

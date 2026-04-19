@@ -220,6 +220,54 @@ func (s *Session) SetTodoStatus(id string, status TodoStatus, expectedRevision i
 	return s.UpdateTodo(id, patch, expectedRevision)
 }
 
+// RetryTodo 将 failed 任务受控恢复为 pending，供显式重试动作使用。
+func (s *Session) RetryTodo(id string, expectedRevision int64) error {
+	if s == nil {
+		return errors.New("session: session is nil")
+	}
+
+	var err error
+	id, err = ensureTodoID(id)
+	if err != nil {
+		return err
+	}
+
+	items := append([]TodoItem(nil), s.Todos...)
+	for idx := range items {
+		if items[idx].ID != id {
+			continue
+		}
+		if err := ensureTodoRevision(items[idx], expectedRevision); err != nil {
+			return err
+		}
+		if items[idx].Status != TodoStatusFailed {
+			return fmt.Errorf("%w: retry requires failed status, got %q", ErrInvalidTransition, items[idx].Status)
+		}
+
+		next := items[idx].Clone()
+		next.Status = TodoStatusPending
+		next.OwnerType = ""
+		next.OwnerID = ""
+		next.Artifacts = nil
+		next.FailureReason = ""
+		next.RetryCount = 0
+		next.NextRetryAt = time.Time{}
+		next.UpdatedAt = time.Now()
+		next.Revision = items[idx].Revision + 1
+		items[idx] = next
+
+		normalized, err := normalizeAndValidateTodos(items)
+		if err != nil {
+			return err
+		}
+		s.Todos = normalized
+		s.TodoVersion = CurrentTodoVersion
+		return nil
+	}
+
+	return fmt.Errorf("%w: %q", ErrTodoNotFound, id)
+}
+
 // UpdateTodo 按补丁更新 Todo 并执行状态机、依赖与 revision 校验。
 func (s *Session) UpdateTodo(id string, patch TodoPatch, expectedRevision int64) error {
 	if s == nil {
@@ -452,7 +500,7 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 	if item.Status != TodoStatusFailed && item.Status != TodoStatusPending && item.Status != TodoStatusBlocked {
 		item.FailureReason = ""
 	}
-	if item.Status != TodoStatusPending && item.Status != TodoStatusFailed {
+	if item.Status != TodoStatusPending && item.Status != TodoStatusFailed && item.Status != TodoStatusBlocked {
 		item.NextRetryAt = time.Time{}
 	}
 	return item, nil

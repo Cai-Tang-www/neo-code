@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -37,6 +38,10 @@ func (m *stubMutator) UpdateTodo(id string, patch agentsession.TodoPatch, expect
 
 func (m *stubMutator) SetTodoStatus(id string, status agentsession.TodoStatus, expectedRevision int64) error {
 	return m.session.SetTodoStatus(id, status, expectedRevision)
+}
+
+func (m *stubMutator) RetryTodo(id string, expectedRevision int64) error {
+	return m.session.RetryTodo(id, expectedRevision)
 }
 
 func (m *stubMutator) DeleteTodo(id string, expectedRevision int64) error {
@@ -196,6 +201,17 @@ func TestToolMetadataMethods(t *testing.T) {
 	if !ok {
 		t.Fatalf("Schema() properties should be map, got %T", schema["properties"])
 	}
+	actionProperty, ok := properties["action"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema() action should be object, got %T", properties["action"])
+	}
+	actionEnums, ok := actionProperty["enum"].([]string)
+	if !ok {
+		t.Fatalf("Schema() action.enum should be []string, got %T", actionProperty["enum"])
+	}
+	if !slices.Contains(actionEnums, actionRetry) {
+		t.Fatalf("Schema() action.enum = %v, want contains %q", actionEnums, actionRetry)
+	}
 	if _, ok := properties["item"]; !ok {
 		t.Fatalf("Schema() should include item property")
 	}
@@ -313,6 +329,58 @@ func TestToolExecuteActionSequence(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "action: fail") {
 		t.Fatalf("unexpected fail content: %q", result.Content)
+	}
+
+	// retry
+	result, err = tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:           tools.ToolNameTodoWrite,
+		SessionMutator: mutator,
+		Arguments:      []byte(`{"action":"retry","id":"task2","expected_revision":3}`),
+	})
+	if err != nil {
+		t.Fatalf("retry task2 error = %v", err)
+	}
+	if !strings.Contains(result.Content, "action: retry") {
+		t.Fatalf("unexpected retry content: %q", result.Content)
+	}
+	retried, _ := mutator.FindTodo("task2")
+	if retried.Status != agentsession.TodoStatusPending {
+		t.Fatalf("task2 status = %q, want pending", retried.Status)
+	}
+}
+
+func TestToolExecuteRetry(t *testing.T) {
+	t.Parallel()
+
+	session := agentsession.New("todo-retry")
+	if err := session.AddTodo(agentsession.TodoItem{
+		ID:            "task",
+		Content:       "task",
+		Status:        agentsession.TodoStatusFailed,
+		FailureReason: "boom",
+		OwnerType:     agentsession.TodoOwnerTypeSubAgent,
+		OwnerID:       "w1",
+		RetryCount:    2,
+	}); err != nil {
+		t.Fatalf("AddTodo(task) error = %v", err)
+	}
+	mutator := &stubMutator{session: &session}
+	tool := New()
+
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:           tools.ToolNameTodoWrite,
+		SessionMutator: mutator,
+		Arguments:      []byte(`{"action":"retry","id":"task","expected_revision":1}`),
+	})
+	if err != nil {
+		t.Fatalf("Execute(retry) error = %v", err)
+	}
+	if !strings.Contains(result.Content, "action: retry") {
+		t.Fatalf("unexpected retry content: %q", result.Content)
+	}
+	item, _ := mutator.FindTodo("task")
+	if item.Status != agentsession.TodoStatusPending || item.RetryCount != 0 {
+		t.Fatalf("retry not applied, got %+v", item)
 	}
 }
 
@@ -530,6 +598,7 @@ func TestDispatchValidationErrors(t *testing.T) {
 		{name: "claim without owner", in: writeInput{Action: actionClaim, ID: "a"}, want: "requires owner_type and owner_id"},
 		{name: "complete without id", in: writeInput{Action: actionComplete}, want: "requires id"},
 		{name: "fail without id", in: writeInput{Action: actionFail}, want: "requires id"},
+		{name: "retry without id", in: writeInput{Action: actionRetry}, want: "requires id"},
 	}
 
 	for _, tt := range tests {

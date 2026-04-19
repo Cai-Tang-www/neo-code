@@ -5,21 +5,27 @@ import (
 )
 
 const (
-	DefaultMaxNoProgressStreak  = 3
-	DefaultMaxRepeatCycleStreak = 3
+	DefaultMaxNoProgressStreak         = 5
+	DefaultMaxRepeatCycleStreak        = 3
+	DefaultMaxTurn                     = 20
+	DefaultSubAgentDispatchConcurrency = 2
 )
 
 // RuntimeConfig 定义 runtime 层的可调参数。
 type RuntimeConfig struct {
-	MaxNoProgressStreak  int `yaml:"max_no_progress_streak,omitempty"`
-	MaxRepeatCycleStreak int `yaml:"max_repeat_cycle_streak,omitempty"`
+	MaxNoProgressStreak         int `yaml:"max_no_progress_streak,omitempty"`
+	MaxRepeatCycleStreak        int `yaml:"max_repeat_cycle_streak,omitempty"`
+	MaxTurn                     int `yaml:"max_turn,omitempty"`
+	SubAgentDispatchConcurrency int `yaml:"subagent_dispatch_concurrency,omitempty"`
 }
 
 // defaultRuntimeConfig 返回 runtime 配置的静态默认值。
 func defaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
-		MaxNoProgressStreak:  DefaultMaxNoProgressStreak,
-		MaxRepeatCycleStreak: DefaultMaxRepeatCycleStreak,
+		MaxNoProgressStreak:         DefaultMaxNoProgressStreak,
+		MaxRepeatCycleStreak:        DefaultMaxRepeatCycleStreak,
+		MaxTurn:                     DefaultMaxTurn,
+		SubAgentDispatchConcurrency: DefaultSubAgentDispatchConcurrency,
 	}
 }
 
@@ -39,6 +45,12 @@ func (c *RuntimeConfig) ApplyDefaults(defaults RuntimeConfig) {
 	if c.MaxRepeatCycleStreak <= 0 {
 		c.MaxRepeatCycleStreak = defaults.MaxRepeatCycleStreak
 	}
+	if c.MaxTurn <= 0 {
+		c.MaxTurn = defaults.MaxTurn
+	}
+	if c.SubAgentDispatchConcurrency <= 0 {
+		c.SubAgentDispatchConcurrency = defaults.SubAgentDispatchConcurrency
+	}
 }
 
 // Validate 校验 runtime 配置是否满足最小约束。
@@ -48,6 +60,12 @@ func (c RuntimeConfig) Validate() error {
 	}
 	if c.MaxRepeatCycleStreak <= 0 {
 		return errors.New("max_repeat_cycle_streak must be greater than 0")
+	}
+	if c.MaxTurn <= 0 {
+		return errors.New("max_turn must be greater than 0")
+	}
+	if c.SubAgentDispatchConcurrency <= 0 {
+		return errors.New("subagent_dispatch_concurrency must be greater than 0")
 	}
 	return nil
 }

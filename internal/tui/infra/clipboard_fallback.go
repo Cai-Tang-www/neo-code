@@ -7,6 +7,9 @@ import (
 )
 
 func CopyText(text string) error {
+	if handled, err := runCopyTextHook(text); handled {
+		return err
+	}
 	return clipboardtext.WriteAll(text)
 }
 

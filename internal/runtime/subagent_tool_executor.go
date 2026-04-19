@@ -133,6 +133,9 @@ func resolveToolExecutionDecision(execErr error) string {
 	if execErr == nil {
 		return permissionDecisionAllow
 	}
+	if errors.Is(execErr, errPermissionApprovalPending) {
+		return stringPermissionDecisionAsk
+	}
 	var permissionErr *tools.PermissionDecisionError
 	if errors.As(execErr, &permissionErr) {
 		return permissionErr.Decision()

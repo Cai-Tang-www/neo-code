@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
 	agentsession "neo-code/internal/session"
@@ -581,6 +582,36 @@ func TestHasSubAgentTodoWaitingForAgentDependency(t *testing.T) {
 	}
 }
 
+func TestResolveSubAgentDispatchConcurrency(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, nil)
+	service := NewWithFactory(
+		manager,
+		tools.NewRegistry(),
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		&stubContextBuilder{},
+	)
+	if got := service.resolveSubAgentDispatchConcurrency(); got != config.DefaultSubAgentDispatchConcurrency {
+		t.Fatalf(
+			"resolveSubAgentDispatchConcurrency() = %d, want %d",
+			got,
+			config.DefaultSubAgentDispatchConcurrency,
+		)
+	}
+
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.SubAgentDispatchConcurrency = 7
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+	if got := service.resolveSubAgentDispatchConcurrency(); got != 7 {
+		t.Fatalf("resolveSubAgentDispatchConcurrency() = %d, want 7", got)
+	}
+}
+
 func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T) {
 	t.Parallel()
 
@@ -599,12 +630,12 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 		Type:    subagent.SchedulerEventSubAgentStarted,
 		TaskID:  "task-1",
 		Attempt: 1,
-	})
+	}, 2)
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
 		Type:    subagent.SchedulerEventSubAgentCompleted,
 		TaskID:  "task-1",
 		Attempt: 1,
-	})
+	}, 2)
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
 		Type:      subagent.SchedulerEventSubAgentRetried,
 		TaskID:    "task-1",
@@ -612,14 +643,21 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 		Reason:    "retry_after_failure",
 		QueueSize: 5,
 		Running:   1,
-	})
+	}, 2)
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
 		Type:      subagent.SchedulerEventBlocked,
 		TaskID:    "task-2",
 		Reason:    "dependency_unmet",
 		QueueSize: 4,
 		Running:   2,
-	})
+	}, 2)
+	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
+		Type:      subagent.SchedulerEventBlocked,
+		TaskID:    "task-2a",
+		Reason:    subAgentSchedulerReasonApprovalPending,
+		QueueSize: 4,
+		Running:   2,
+	}, 2)
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
 		Type:      subagent.SchedulerEventSubAgentFailed,
 		TaskID:    "task-3",
@@ -627,16 +665,16 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 		Reason:    "dependency_failed",
 		QueueSize: 3,
 		Running:   0,
-	})
+	}, 2)
 	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
 		Type:      subagent.SchedulerEventFinished,
 		QueueSize: 3,
 		Running:   0,
-	})
+	}, 2)
 
 	events := collectRuntimeEvents(service.Events())
-	if len(events) != 4 {
-		t.Fatalf("event count = %d, want 4", len(events))
+	if len(events) != 5 {
+		t.Fatalf("event count = %d, want 5", len(events))
 	}
 	assertEventContains(t, events, EventSubAgentRetried)
 	assertEventContains(t, events, EventSubAgentBlocked)
@@ -653,9 +691,24 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 			if payload.QueueSize != 5 || payload.Running != 1 {
 				t.Fatalf("retried payload queue/running = %d/%d, want 5/1", payload.QueueSize, payload.Running)
 			}
+			if payload.DispatchConcurrency != 2 {
+				t.Fatalf(
+					"retried payload dispatch_concurrency = %d, want 2",
+					payload.DispatchConcurrency,
+				)
+			}
 		case EventSubAgentBlocked:
 			if payload.QueueSize != 4 || payload.Running != 2 {
 				t.Fatalf("blocked payload queue/running = %d/%d, want 4/2", payload.QueueSize, payload.Running)
+			}
+			if payload.DispatchConcurrency != 2 {
+				t.Fatalf(
+					"blocked payload dispatch_concurrency = %d, want 2",
+					payload.DispatchConcurrency,
+				)
+			}
+			if payload.TaskID == "task-2a" && !payload.PendingApproval {
+				t.Fatalf("blocked approval payload should set pending_approval=true")
 			}
 		case EventSubAgentFailed:
 			if payload.TaskID != "task-3" || payload.Step != 1 {
@@ -666,6 +719,12 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 			}
 			if payload.QueueSize != 3 || payload.Running != 0 {
 				t.Fatalf("failed payload queue/running = %d/%d, want 3/0", payload.QueueSize, payload.Running)
+			}
+			if payload.DispatchConcurrency != 2 {
+				t.Fatalf(
+					"failed payload dispatch_concurrency = %d, want 2",
+					payload.DispatchConcurrency,
+				)
 			}
 		case EventSubAgentFinished:
 			if payload.TaskID != "" {
@@ -679,6 +738,12 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 			}
 			if payload.QueueSize != 3 || payload.Running != 0 {
 				t.Fatalf("finished payload queue/running = %d/%d, want 3/0", payload.QueueSize, payload.Running)
+			}
+			if payload.DispatchConcurrency != 2 {
+				t.Fatalf(
+					"finished payload dispatch_concurrency = %d, want 2",
+					payload.DispatchConcurrency,
+				)
 			}
 		}
 	}
@@ -738,8 +803,8 @@ func TestRunStopsMixedExecutorNoToolCallStallByNoProgressLimit(t *testing.T) {
 		t.Fatalf("Run() error = %v, want ErrNoProgressStreakLimit", err)
 	}
 
-	if scripted.callCount != 3 {
-		t.Fatalf("provider call count = %d, want 3", scripted.callCount)
+	if scripted.callCount != 5 {
+		t.Fatalf("provider call count = %d, want 5", scripted.callCount)
 	}
 
 	session := firstSessionFromMemoryStore(t, store)
@@ -754,6 +819,75 @@ func TestRunStopsMixedExecutorNoToolCallStallByNoProgressLimit(t *testing.T) {
 
 	events := collectRuntimeEvents(service.Events())
 	assertStopReasonDecided(t, events, controlplane.StopReasonError, ErrNoProgressStreakLimit.Error())
+}
+
+func TestRunStopsByMaxTurnLimitBeforeNoProgressLimit(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, nil)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.MaxNoProgressStreak = 10
+		cfg.Runtime.MaxTurn = 2
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	scripted := &scriptedProvider{
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			_ = ctx
+			_ = req
+			events <- providertypes.NewTextDeltaStreamEvent("still waiting")
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+	service := NewWithFactory(
+		manager,
+		tools.NewRegistry(),
+		store,
+		&scriptedProviderFactory{provider: scripted},
+		&stubContextBuilder{},
+	)
+
+	seed := agentsession.New("dispatch-max-turn-limit")
+	seed.Workdir = manager.Get().Workdir
+	if err := seed.ReplaceTodos([]agentsession.TodoItem{
+		{
+			ID:       "agent-1",
+			Content:  "agent prerequisite",
+			Executor: agentsession.TodoExecutorAgent,
+			Status:   agentsession.TodoStatusPending,
+		},
+		{
+			ID:           "sub-1",
+			Content:      "subagent follow-up",
+			Executor:     agentsession.TodoExecutorSubAgent,
+			Status:       agentsession.TodoStatusBlocked,
+			Dependencies: []string{"agent-1"},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos(seed) error = %v", err)
+	}
+	saveSessionToMemoryStore(store, seed)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := service.Run(ctx, UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-max-turn-limit",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	})
+	if !errors.Is(err, ErrMaxTurnLimit) {
+		t.Fatalf("Run() error = %v, want ErrMaxTurnLimit", err)
+	}
+	if scripted.callCount != 2 {
+		t.Fatalf("provider call count = %d, want 2", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonError, ErrMaxTurnLimit.Error())
 }
 
 func newSuccessSubAgentFactory() subagent.Factory {

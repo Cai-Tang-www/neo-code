@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/subagent"
 )
 
@@ -48,19 +47,24 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 	factory := s.SubAgentFactory()
 	worker, err := factory.Create(input.Role)
 	if err != nil {
-		emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, input.Task.ID, err)
+		emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, input.Task.ID, task.RetryCount+1, err)
 		return subagent.Result{}, err
 	}
 
 	if err := worker.Start(task, input.Budget, input.Capability); err != nil {
-		emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, input.Task.ID, err)
+		emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, input.Task.ID, task.RetryCount+1, err)
 		return subagent.Result{}, err
 	}
+	startedAt := time.Now()
+	attempt := task.RetryCount + 1
 
-	_ = s.emit(ctx, EventSubAgentStarted, input.RunID, input.SessionID, SubAgentEventPayload{
-		Role:   input.Role,
-		TaskID: task.ID,
-		State:  worker.State(),
+	_ = s.emit(ctx, EventSubAgentTaskStarted, input.RunID, input.SessionID, SubAgentEventPayload{
+		Role:      input.Role,
+		Executor:  "subagent",
+		TaskID:    task.ID,
+		State:     worker.State(),
+		Attempts:  attempt,
+		StartedAt: startedAt,
 	})
 
 	for {
@@ -68,7 +72,18 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 		if stepResult.State == "" {
 			stepResult.State = worker.State()
 		}
-		emitSubAgentProgress(s, input.RunID, input.SessionID, input.Role, task.ID, stepResult, stepErr)
+		emitSubAgentProgress(
+			s,
+			ctx,
+			input.RunID,
+			input.SessionID,
+			input.Role,
+			task.ID,
+			attempt,
+			startedAt,
+			stepResult,
+			stepErr,
+		)
 
 		if stepErr != nil {
 			if errors.Is(stepErr, context.DeadlineExceeded) {
@@ -77,7 +92,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 				if resultErr != nil {
 					result = fallbackSubAgentResult(input.Role, task.ID, subagent.StateFailed, subagent.StopReasonTimeout, stepErr)
 				}
-				emitSubAgentTerminal(s, ctx, input, result)
+				emitSubAgentTerminal(s, ctx, input, result, attempt, startedAt)
 				return result, stepErr
 			}
 			if errors.Is(stepErr, context.Canceled) {
@@ -86,16 +101,16 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 				if resultErr != nil {
 					result = fallbackSubAgentResult(input.Role, task.ID, subagent.StateCanceled, subagent.StopReasonCanceled, stepErr)
 				}
-				emitSubAgentTerminal(s, ctx, input, result)
+				emitSubAgentTerminal(s, ctx, input, result, attempt, startedAt)
 				return result, stepErr
 			}
 
 			result, resultErr := worker.Result()
 			if resultErr != nil {
-				emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, stepErr)
+				emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, attempt, stepErr)
 				return subagent.Result{}, stepErr
 			}
-			emitSubAgentTerminal(s, ctx, input, result)
+			emitSubAgentTerminal(s, ctx, input, result, attempt, startedAt)
 			return result, stepErr
 		}
 
@@ -105,10 +120,10 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 		result, err := worker.Result()
 		if err != nil {
-			emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, err)
+			emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, attempt, err)
 			return subagent.Result{}, err
 		}
-		emitSubAgentTerminal(s, ctx, input, result)
+		emitSubAgentTerminal(s, ctx, input, result, attempt, startedAt)
 		if result.State == subagent.StateSucceeded {
 			return result, nil
 		}
@@ -124,70 +139,80 @@ func emitSubAgentFailed(
 	sessionID string,
 	role subagent.Role,
 	taskID string,
+	attempt int,
 	err error,
 ) {
 	if s == nil {
 		return
 	}
-	_ = s.emit(ctx, EventSubAgentFailed, runID, sessionID, SubAgentEventPayload{
-		Role:   role,
-		TaskID: taskID,
-		State:  subagent.StateFailed,
-		Error:  errorText(err),
+	_ = s.emit(ctx, EventSubAgentTaskFailed, runID, sessionID, SubAgentEventPayload{
+		Role:     role,
+		Executor: "subagent",
+		TaskID:   taskID,
+		State:    subagent.StateFailed,
+		Attempts: attempt,
+		Error:    errorText(err),
 	})
 }
 
-// emitSubAgentProgress 非阻塞发射进度事件，避免慢消费者反压执行路径。
+// emitSubAgentProgress 发射进度事件，并补齐当前尝试次数与起始时间。
 func emitSubAgentProgress(
 	s *Service,
+	ctx context.Context,
 	runID string,
 	sessionID string,
 	role subagent.Role,
 	taskID string,
+	attempt int,
+	startedAt time.Time,
 	stepResult subagent.StepResult,
 	stepErr error,
 ) {
 	payload := SubAgentEventPayload{
-		Role:   role,
-		TaskID: strings.TrimSpace(taskID),
-		State:  stepResult.State,
-		Step:   stepResult.Step,
-		Delta:  stepResult.Delta,
-		Error:  errorText(stepErr),
+		Role:      role,
+		Executor:  "subagent",
+		TaskID:    strings.TrimSpace(taskID),
+		State:     stepResult.State,
+		Step:      stepResult.Step,
+		Attempts:  attempt,
+		StartedAt: startedAt,
+		Delta:     stepResult.Delta,
+		Error:     errorText(stepErr),
 	}
-	event := RuntimeEvent{
-		Type:           EventSubAgentProgress,
-		RunID:          strings.TrimSpace(runID),
-		SessionID:      strings.TrimSpace(sessionID),
-		Turn:           turnUnspecified,
-		Timestamp:      time.Now(),
-		PayloadVersion: controlplane.PayloadVersion,
-		Payload:        payload,
-	}
-	select {
-	case s.events <- event:
-	default:
-	}
+	emitCtx, cancel := stopReasonEmitContext(ctx)
+	defer cancel()
+	_ = s.emit(emitCtx, EventSubAgentTaskProgress, strings.TrimSpace(runID), strings.TrimSpace(sessionID), payload)
 }
 
 // emitSubAgentTerminal 按子代理终态发射最终事件。
-func emitSubAgentTerminal(s *Service, ctx context.Context, input SubAgentTaskInput, result subagent.Result) {
+func emitSubAgentTerminal(
+	s *Service,
+	ctx context.Context,
+	input SubAgentTaskInput,
+	result subagent.Result,
+	attempt int,
+	startedAt time.Time,
+) {
 	payload := SubAgentEventPayload{
 		Role:       result.Role,
+		Executor:   "subagent",
 		TaskID:     result.TaskID,
 		State:      result.State,
 		StopReason: result.StopReason,
 		Step:       result.StepCount,
+		Attempts:   attempt,
+		StartedAt:  startedAt,
+		EndedAt:    time.Now(),
 		Error:      strings.TrimSpace(result.Error),
 	}
 
 	switch result.State {
 	case subagent.StateSucceeded:
-		_ = s.emit(ctx, EventSubAgentCompleted, input.RunID, input.SessionID, payload)
+		_ = s.emit(ctx, EventSubAgentTaskCompleted, input.RunID, input.SessionID, payload)
 	case subagent.StateCanceled:
-		_ = s.emit(ctx, EventSubAgentCanceled, input.RunID, input.SessionID, payload)
+		_ = s.emit(ctx, EventSubAgentTaskCanceled, input.RunID, input.SessionID, payload)
 	default:
-		_ = s.emit(ctx, EventSubAgentFailed, input.RunID, input.SessionID, payload)
+		_ = s.emit(ctx, EventSubAgentTaskFailed, input.RunID, input.SessionID, payload)
 	}
 }
 

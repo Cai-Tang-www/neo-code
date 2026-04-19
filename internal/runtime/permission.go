@@ -41,6 +41,8 @@ const (
 	permissionToolCategoryMCP             = "mcp"
 )
 
+var errPermissionApprovalPending = errors.New("runtime: permission approval pending")
+
 // permissionExecutionInput 汇总一次工具执行与审批协作所需的上下文。
 type permissionExecutionInput struct {
 	RunID       string
@@ -204,6 +206,9 @@ func (s *Service) awaitPermissionDecision(
 
 	select {
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", requestID, fmt.Errorf("%w: request_id=%s", errPermissionApprovalPending, requestID)
+		}
 		return "", requestID, ctx.Err()
 	case decision := <-resultCh:
 		return decision, requestID, nil

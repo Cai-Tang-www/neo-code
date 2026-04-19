@@ -16,6 +16,7 @@ type RuntimeEvent struct {
 	SessionID      string
 	Turn           int
 	Phase          string
+	Sequence       uint64
 	Timestamp      time.Time
 	PayloadVersion int
 	Payload        any

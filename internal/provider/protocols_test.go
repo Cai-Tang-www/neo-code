@@ -137,14 +137,14 @@ func TestNormalizeProviderProtocolSettingsDefaults(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name                   string
-		driver                 string
-		chatProtocol           string
-		discoveryProtocol      string
-		wantChatEndpoint       string
-		wantDiscoveryEndpoint  string
-		wantAuthStrategy       string
-		wantResponseProfile    string
+		name                  string
+		driver                string
+		chatProtocol          string
+		discoveryProtocol     string
+		wantChatEndpoint      string
+		wantDiscoveryEndpoint string
+		wantAuthStrategy      string
+		wantResponseProfile   string
 	}{
 		{
 			name:                  "openai defaults",

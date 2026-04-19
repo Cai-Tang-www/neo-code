@@ -3377,6 +3377,43 @@ func collectRuntimeEvents(events <-chan RuntimeEvent) []RuntimeEvent {
 	}
 }
 
+func TestRuntimeEventsCarryMonotonicSequence(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 8),
+	}
+
+	if err := service.emit(context.Background(), EventAgentChunk, "run-seq", "session-seq", "chunk-1"); err != nil {
+		t.Fatalf("emit(chunk-1) error = %v", err)
+	}
+	if err := service.emit(context.Background(), EventAgentChunk, "run-seq", "session-seq", "chunk-2"); err != nil {
+		t.Fatalf("emit(chunk-2) error = %v", err)
+	}
+	if err := service.emit(context.Background(), EventAgentDone, "run-seq", "session-seq", "done"); err != nil {
+		t.Fatalf("emit(done) error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	if len(events) != 3 {
+		t.Fatalf("event count = %d, want 3", len(events))
+	}
+	for index, event := range events {
+		if event.Sequence == 0 {
+			t.Fatalf("event[%d] sequence should be non-zero", index)
+		}
+		if event.Timestamp.IsZero() {
+			t.Fatalf("event[%d] timestamp should be non-zero", index)
+		}
+		if index == 0 {
+			continue
+		}
+		if events[index-1].Sequence >= event.Sequence {
+			t.Fatalf("sequence not monotonic: prev=%d current=%d", events[index-1].Sequence, event.Sequence)
+		}
+	}
+}
+
 // isPermissionRequestEvent 判断是否为权限请求类事件（含 1A 主事件与兼容旧名）。
 func isPermissionRequestEvent(typ EventType) bool {
 	return typ == EventPermissionRequested

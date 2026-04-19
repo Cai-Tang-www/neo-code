@@ -35,10 +35,13 @@ type schedulerState struct {
 	readySince map[string]time.Time
 	started    map[string]int
 	progress   map[string]string
+	deferred   map[string]struct{}
 	outcomes   chan taskOutcome
 }
 
 var errSchedulerFailFast = errors.New("subagent: scheduler fail-fast triggered")
+
+const schedulerReasonApprovalPending = "approval_pending"
 
 // NewScheduler 创建 Task DAG 调度器，并校验核心依赖是否可用。
 func NewScheduler(store TodoStore, factory Factory, cfg SchedulerConfig) (*Scheduler, error) {
@@ -234,6 +237,7 @@ func newSchedulerState(maxConcurrency int) *schedulerState {
 		readySince: make(map[string]time.Time, 32),
 		started:    make(map[string]int, 32),
 		progress:   make(map[string]string, 32),
+		deferred:   make(map[string]struct{}, 16),
 		outcomes:   make(chan taskOutcome, buffer),
 	}
 }
@@ -257,6 +261,9 @@ func (s *Scheduler) collectReadyTasks(
 			continue
 		}
 		if _, running := state.running[id]; running {
+			continue
+		}
+		if _, deferred := state.deferred[id]; deferred {
 			continue
 		}
 
@@ -573,7 +580,7 @@ func (s *Scheduler) executeTaskAsync(
 	base.err = err
 	select {
 	case out <- base:
-	default:
+	case <-parent.Done():
 	}
 }
 
@@ -650,6 +657,11 @@ func (s *Scheduler) handleTaskFailure(
 	if retryLimit <= 0 {
 		retryLimit = s.cfg.MaxRetries
 	}
+
+	if strings.EqualFold(reason, schedulerReasonApprovalPending) {
+		return s.blockForApprovalPending(current, reason, retryLimit, state)
+	}
+
 	nextRetryCount := current.RetryCount + 1
 
 	if nextRetryCount <= retryLimit {
@@ -734,6 +746,54 @@ func (s *Scheduler) handleTaskFailure(
 	if s.cfg.failFastEnabled() {
 		return fmt.Errorf("%w: task=%s reason=%s", errSchedulerFailFast, current.ID, reason)
 	}
+	return nil
+}
+
+// blockForApprovalPending 将审批等待中的任务收敛为 blocked，避免误计入失败重试链。
+func (s *Scheduler) blockForApprovalPending(
+	current agentsession.TodoItem,
+	reason string,
+	retryLimit int,
+	state *schedulerState,
+) error {
+	status := agentsession.TodoStatusBlocked
+	ownerType := ""
+	ownerID := ""
+	nextRetryAt := s.cfg.Clock().Add(s.cfg.Backoff(current.RetryCount + 1))
+	patch := agentsession.TodoPatch{
+		Status:        &status,
+		OwnerType:     &ownerType,
+		OwnerID:       &ownerID,
+		FailureReason: &reason,
+		RetryLimit:    &retryLimit,
+		NextRetryAt:   &nextRetryAt,
+	}
+	if err := s.store.UpdateTodo(current.ID, patch, current.Revision); err != nil {
+		if isRevisionConflict(err) {
+			return nil
+		}
+		return fmt.Errorf("subagent: block todo %q for approval: %w", current.ID, err)
+	}
+	if state != nil {
+		state.deferred[current.ID] = struct{}{}
+	}
+
+	s.emit(SchedulerEvent{
+		Type:    SchedulerEventBlocked,
+		TaskID:  current.ID,
+		Attempt: current.RetryCount + 1,
+		Reason:  reason,
+		Running: len(state.running),
+		At:      s.cfg.Clock(),
+	})
+	s.emitProgressIfChanged(state, SchedulerEvent{
+		Type:    SchedulerEventSubAgentProgress,
+		TaskID:  current.ID,
+		Attempt: current.RetryCount + 1,
+		Reason:  reason,
+		Running: len(state.running),
+		At:      s.cfg.Clock(),
+	})
 	return nil
 }
 
@@ -1022,13 +1082,29 @@ func resolveTaskFailureReason(outcome taskOutcome) string {
 	}
 	if outcome.err != nil {
 		if text := strings.TrimSpace(outcome.err.Error()); text != "" {
+			if isApprovalPendingErrorText(text) {
+				return schedulerReasonApprovalPending
+			}
 			return text
 		}
 	}
 	if text := strings.TrimSpace(outcome.result.Error); text != "" {
+		if isApprovalPendingErrorText(text) {
+			return schedulerReasonApprovalPending
+		}
 		return text
 	}
 	return "subagent task execution failed"
+}
+
+// isApprovalPendingErrorText 判断失败文本是否属于审批等待语义。
+func isApprovalPendingErrorText(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "approval_pending") ||
+		strings.Contains(normalized, "approval pending")
 }
 
 // isRevisionConflict 判断错误是否为 revision 竞争冲突，便于调度层重试。

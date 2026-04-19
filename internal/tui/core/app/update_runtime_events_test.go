@@ -133,6 +133,15 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventCompactApplied]; !ok {
 		t.Fatalf("expected compact_applied handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentTaskStarted]; !ok {
+		t.Fatalf("expected subagent_task_started handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentTaskProgress]; !ok {
+		t.Fatalf("expected subagent_task_progress handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentDispatchFinished]; !ok {
+		t.Fatalf("expected subagent_dispatch_finished handler to be registered")
+	}
 }
 
 func TestShouldHandleRuntimeEventFiltersBySessionAndRun(t *testing.T) {

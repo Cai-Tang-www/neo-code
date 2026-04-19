@@ -413,6 +413,13 @@ func TestResolveStreakLimitDefaults(t *testing.T) {
 	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: 6}); got != 6 {
 		t.Fatalf("expected explicit repeat limit 6, got %d", got)
 	}
+
+	if got := resolveRunMaxTurn(config.RuntimeConfig{MaxTurn: 0}); got != config.DefaultMaxTurn {
+		t.Fatalf("expected default max turn %d, got %d", config.DefaultMaxTurn, got)
+	}
+	if got := resolveRunMaxTurn(config.RuntimeConfig{MaxTurn: 25}); got != 25 {
+		t.Fatalf("expected explicit max turn 25, got %d", got)
+	}
 }
 
 func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {

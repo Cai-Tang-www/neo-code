@@ -18,7 +18,8 @@ const (
 	// 避免 ask 审批等待稍长就触发 worker timeout 并误判为任务失败。
 	defaultSubAgentDispatchTaskTimeout = 5 * time.Minute
 	// defaultSubAgentDispatchMaxRetries 定义 runtime 自动调度的默认重试上限，避免瞬时失败直接终止 DAG。
-	defaultSubAgentDispatchMaxRetries = 2
+	defaultSubAgentDispatchMaxRetries      = 2
+	subAgentSchedulerReasonApprovalPending = "approval_pending"
 )
 
 // dispatchTodos 在当前轮次执行一次 Todo DAG 调度，并把子代理事件映射到 runtime 事件流。
@@ -40,11 +41,12 @@ func (s *Service) dispatchTodos(ctx context.Context, state *runState, snapshot t
 		return false, nil
 	}
 
+	dispatchConcurrency := s.resolveSubAgentDispatchConcurrency()
 	scheduler, err := subagent.NewScheduler(
 		store,
 		newRuntimeSchedulerFactory(s, state, strings.TrimSpace(snapshot.workdir)),
 		subagent.SchedulerConfig{
-			MaxConcurrency: resolveSubAgentDispatchConcurrency(),
+			MaxConcurrency: dispatchConcurrency,
 			PollInterval:   defaultSubAgentDispatchPollDelay,
 			DefaultBudget: subagent.Budget{
 				Timeout: defaultSubAgentDispatchTaskTimeout,
@@ -58,7 +60,7 @@ func (s *Service) dispatchTodos(ctx context.Context, state *runState, snapshot t
 			},
 			DispatchOnce: true,
 			Observer: func(event subagent.SchedulerEvent) {
-				s.emitSubAgentSchedulerEvent(ctx, state, event)
+				s.emitSubAgentSchedulerEvent(ctx, state, event, dispatchConcurrency)
 			},
 		},
 	)
@@ -97,11 +99,21 @@ func hasDispatchableSubAgentTodo(items []agentsession.TodoItem) bool {
 }
 
 // resolveSubAgentDispatchConcurrency 返回调度并发上限。
-func resolveSubAgentDispatchConcurrency() int {
-	if defaultSubAgentDispatchConcurrency <= 0 {
+func (s *Service) resolveSubAgentDispatchConcurrency() int {
+	if s == nil || s.configManager == nil {
+		if defaultSubAgentDispatchConcurrency <= 0 {
+			return 1
+		}
+		return defaultSubAgentDispatchConcurrency
+	}
+	configured := s.configManager.Get().Runtime.SubAgentDispatchConcurrency
+	if configured <= 0 {
+		configured = defaultSubAgentDispatchConcurrency
+	}
+	if configured <= 0 {
 		return 1
 	}
-	return defaultSubAgentDispatchConcurrency
+	return configured
 }
 
 // hasSubAgentTodoWaitingForAgentDependency 判断是否存在需要继续由 agent 路径补齐依赖的子任务。
@@ -134,34 +146,49 @@ func hasSubAgentTodoWaitingForAgentDependency(items []agentsession.TodoItem) boo
 }
 
 // emitSubAgentSchedulerEvent 把 scheduler 事件映射为 runtime 事件。
-func (s *Service) emitSubAgentSchedulerEvent(ctx context.Context, state *runState, event subagent.SchedulerEvent) {
+func (s *Service) emitSubAgentSchedulerEvent(
+	ctx context.Context,
+	state *runState,
+	event subagent.SchedulerEvent,
+	dispatchConcurrency int,
+) {
 	if s == nil || state == nil {
 		return
 	}
+	reason := strings.TrimSpace(event.Reason)
+	pendingApproval := strings.EqualFold(reason, subAgentSchedulerReasonApprovalPending)
 
 	payload := SubAgentEventPayload{
-		TaskID:    strings.TrimSpace(event.TaskID),
-		Step:      event.Attempt,
-		Reason:    strings.TrimSpace(event.Reason),
-		QueueSize: event.QueueSize,
-		Running:   event.Running,
+		Executor:            "subagent",
+		TaskID:              strings.TrimSpace(event.TaskID),
+		Step:                event.Attempt,
+		Attempts:            event.Attempt,
+		Reason:              reason,
+		EndedAt:             event.At,
+		QueueSize:           event.QueueSize,
+		Running:             event.Running,
+		PendingApproval:     pendingApproval,
+		DispatchConcurrency: dispatchConcurrency,
 	}
 
 	switch event.Type {
 	case subagent.SchedulerEventSubAgentRetried:
-		_ = s.emitRunScoped(ctx, EventSubAgentRetried, state, payload)
+		_ = s.emitRunScoped(ctx, EventSubAgentTaskRetried, state, payload)
 	case subagent.SchedulerEventBlocked:
-		_ = s.emitRunScoped(ctx, EventSubAgentBlocked, state, payload)
+		_ = s.emitRunScoped(ctx, EventSubAgentTaskBlocked, state, payload)
 	case subagent.SchedulerEventSubAgentFailed:
-		_ = s.emitRunScoped(ctx, EventSubAgentFailed, state, payload)
+		_ = s.emitRunScoped(ctx, EventSubAgentTaskFailed, state, payload)
 	case subagent.SchedulerEventFinished:
 		payload.TaskID = ""
 		payload.Step = 0
+		payload.Attempts = 0
+		payload.EndedAt = event.At
 		payload.Reason = "dispatch_round_finished"
 		payload.QueueSize = event.QueueSize
 		payload.Running = event.Running
+		payload.PendingApproval = false
 		payload.Delta = fmt.Sprintf("blocked_left=%d running=%d", event.QueueSize, event.Running)
-		_ = s.emitRunScoped(ctx, EventSubAgentFinished, state, payload)
+		_ = s.emitRunScoped(ctx, EventSubAgentDispatchFinished, state, payload)
 	}
 }
 

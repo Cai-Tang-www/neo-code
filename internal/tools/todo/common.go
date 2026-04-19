@@ -20,6 +20,7 @@ const (
 	actionClaim     = "claim"
 	actionComplete  = "complete"
 	actionFail      = "fail"
+	actionRetry     = "retry"
 )
 
 const (

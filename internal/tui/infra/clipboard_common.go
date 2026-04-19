@@ -4,9 +4,39 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 )
 
 var errClipboardImageUnsupported = errors.New("clipboard image is not supported on this platform")
+
+var clipboardHookState struct {
+	mu       sync.RWMutex
+	copyText func(string) error
+}
+
+// runCopyTextHook 在配置了测试钩子时短路真实剪贴板写入，避免测试环境阻塞。
+func runCopyTextHook(text string) (handled bool, err error) {
+	clipboardHookState.mu.RLock()
+	hook := clipboardHookState.copyText
+	clipboardHookState.mu.RUnlock()
+	if hook == nil {
+		return false, nil
+	}
+	return true, hook(text)
+}
+
+// setCopyTextHookForTest 设置测试钩子并返回还原函数，仅供测试用例注入行为。
+func setCopyTextHookForTest(hook func(string) error) func() {
+	clipboardHookState.mu.Lock()
+	prev := clipboardHookState.copyText
+	clipboardHookState.copyText = hook
+	clipboardHookState.mu.Unlock()
+	return func() {
+		clipboardHookState.mu.Lock()
+		clipboardHookState.copyText = prev
+		clipboardHookState.mu.Unlock()
+	}
+}
 
 func SaveImageToTempFile(data []byte, prefix string) (string, error) {
 	pattern := "image-*.png"

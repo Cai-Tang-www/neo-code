@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	goruntime "runtime"
 	"strings"
 	"time"
 
@@ -94,8 +95,9 @@ func (e runtimeSubAgentEngine) RunStep(ctx context.Context, input subagent.StepI
 		toolSpecs = nil
 	}
 
-	systemPrompt := buildSubAgentSystemPrompt(input.Policy, allowedTools)
-	messages := buildSubAgentInitialMessages(input)
+	runtimeShell := e.resolveRuntimeShell()
+	systemPrompt := buildSubAgentSystemPrompt(input.Policy, allowedTools, runtimeShell)
+	messages := buildSubAgentInitialMessages(input, runtimeShell)
 	totalToolCalls := 0
 	maxTurns := resolveSubAgentMaxTurns(input.Policy.DefaultBudget.MaxSteps)
 
@@ -182,6 +184,25 @@ func (e runtimeSubAgentEngine) resolveSettings() (config.ResolvedProviderConfig,
 	return resolvedProvider, model, timeout, nil
 }
 
+// resolveRuntimeShell 返回当前 runtime 配置中的 shell 信息，用于子代理提示词约束命令方言。
+func (e runtimeSubAgentEngine) resolveRuntimeShell() string {
+	if e.service == nil || e.service.configManager == nil {
+		if goruntime.GOOS == "windows" {
+			return "powershell"
+		}
+		return "bash"
+	}
+	cfg := e.service.configManager.Get()
+	shell := strings.ToLower(strings.TrimSpace(cfg.Shell))
+	if shell == "" {
+		if goruntime.GOOS == "windows" {
+			return "powershell"
+		}
+		return "bash"
+	}
+	return shell
+}
+
 // runtimeUnavailableError 封装 runtime 依赖缺失错误，保持错误类型与消息结构一致。
 func runtimeUnavailableError(detail string) error {
 	return fmt.Errorf("%w: %s", errSubAgentRuntimeUnavailable, strings.TrimSpace(detail))
@@ -262,7 +283,7 @@ func executeSubAgentToolCallBatch(
 		if execErr != nil && strings.TrimSpace(message.Parts[0].Text) == "" {
 			message.Parts[0] = providertypes.NewTextPart(strings.TrimSpace(execErr.Error()))
 		}
-		if execErr != nil && !isRecoverableSubAgentToolError(execErr) {
+		if execErr != nil && !isRecoverableSubAgentToolError(execErr, execResult) {
 			return results, executed, execErr
 		}
 		results = append(results, message)
@@ -274,10 +295,19 @@ func executeSubAgentToolCallBatch(
 }
 
 // buildSubAgentInitialMessages 组装子代理首轮输入消息，包含任务、上下文切片与历史 trace。
-func buildSubAgentInitialMessages(input subagent.StepInput) []providertypes.Message {
+func buildSubAgentInitialMessages(input subagent.StepInput, runtimeShell string) []providertypes.Message {
 	lines := []string{
 		"task_id: " + strings.TrimSpace(input.Task.ID),
 		"goal: " + strings.TrimSpace(input.Task.Goal),
+	}
+	if shell := strings.TrimSpace(runtimeShell); shell != "" {
+		lines = append(lines, "runtime_shell: "+shell)
+	}
+	if input.Task.RetryCount > 0 {
+		lines = append(lines, fmt.Sprintf("retry_count: %d", input.Task.RetryCount))
+	}
+	if reason := strings.TrimSpace(input.Task.FailureReason); reason != "" {
+		lines = append(lines, "last_failure_reason: "+reason)
 	}
 	if expected := strings.TrimSpace(input.Task.ExpectedOutput); expected != "" {
 		lines = append(lines, "expected_output: "+expected)
@@ -305,21 +335,46 @@ func buildSubAgentInitialMessages(input subagent.StepInput) []providertypes.Mess
 }
 
 // buildSubAgentSystemPrompt 构建子代理策略提示词，约束工具决策和输出契约。
-func buildSubAgentSystemPrompt(policy subagent.RolePolicy, allowedTools []string) string {
+func buildSubAgentSystemPrompt(policy subagent.RolePolicy, allowedTools []string, runtimeShell string) string {
 	maxToolCallsPerStep := effectiveMaxToolCallsPerStep(policy.MaxToolCallsPerStep)
 	lines := []string{strings.TrimSpace(policy.SystemPrompt)}
 	lines = append(lines,
 		"你是子代理执行引擎的一部分，必须根据任务目标自主决定是否调用工具。",
 		"当需要外部事实、文件状态或命令执行结果时必须调用工具；纯推理可直接完成。",
-		"工具失败后优先换参数或换工具，若仍失败则在输出中明确风险与后续动作。",
+		"工具失败后必须读取错误输出并修正参数/命令重试；禁止忽略错误直接结束。",
+		"如果工具返回错误，至少给出一次修复后重试；若仍失败，输出中必须记录失败证据与替代方案。",
 		"最终输出必须是 JSON 对象，且必须包含键：summary, findings, patches, risks, next_actions, artifacts。",
 		fmt.Sprintf("tool_use_mode: %s", policy.ToolUseMode),
 		fmt.Sprintf("max_tool_calls_per_step: %d", maxToolCallsPerStep),
 	)
+	lines = append(lines, buildShellGuidance(runtimeShell)...)
 	if len(allowedTools) > 0 {
 		lines = append(lines, "allowed_tools: "+strings.Join(allowedTools, ", "))
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// buildShellGuidance 根据 runtime shell 生成命令方言约束，避免模型混用 bash / PowerShell 语法。
+func buildShellGuidance(runtimeShell string) []string {
+	shell := strings.ToLower(strings.TrimSpace(runtimeShell))
+	if shell == "" {
+		return nil
+	}
+	if shell == "powershell" || shell == "pwsh" {
+		return []string{
+			"当前命令环境是 PowerShell；通过 bash 工具执行命令时也必须写 PowerShell 语法。",
+			"禁止 Bash 专属写法：&&、||、mkdir -p、ls、cat <<EOF、export VAR=...、grep。",
+			"请使用 PowerShell 等价命令：New-Item -ItemType Directory -Force、Get-ChildItem、Select-String、$env:NAME='value'。",
+		}
+	}
+	if shell == "bash" || shell == "sh" {
+		return []string{
+			fmt.Sprintf("当前命令环境是 %s；请使用 POSIX/Bash 语法。", shell),
+		}
+	}
+	return []string{
+		fmt.Sprintf("当前命令环境 shell=%s；请严格使用该 shell 对应语法。", shell),
+	}
 }
 
 // resolveAllowedTools 计算本步可用工具集合，优先使用 capability，回退到 policy。
@@ -485,8 +540,12 @@ func toolAllowed(allowlist map[string]struct{}, toolName string) bool {
 }
 
 // isRecoverableSubAgentToolError 判断工具调用错误是否可回灌给模型继续推理。
-func isRecoverableSubAgentToolError(err error) bool {
+func isRecoverableSubAgentToolError(err error, result subagent.ToolExecutionResult) bool {
 	if err == nil {
+		return true
+	}
+	// 工具返回结构化错误结果（例如命令退出码、参数校验失败）时，允许回灌给模型自修复。
+	if result.IsError {
 		return true
 	}
 	var permissionErr *tools.PermissionDecisionError

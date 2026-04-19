@@ -55,6 +55,17 @@ func TestDefaultSecurityExecutorExecute(t *testing.T) {
 			expectErr:   "command is empty",
 		},
 		{
+			name:        "hard deny dangerous command",
+			command:     "rm -rf /",
+			callWorkdir: workspace,
+			expectErr:   "permission denied",
+			expectResult: []string{
+				"tool error",
+				"tool: bash",
+				"reason:",
+			},
+		},
+		{
 			name:         "rejects escaped workdir",
 			command:      "echo hi",
 			callWorkdir:  workspace,

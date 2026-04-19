@@ -54,8 +54,11 @@ func TestTodosSourceSections(t *testing.T) {
 	if sections[0].Title != "Todo State" {
 		t.Fatalf("title = %q, want %q", sections[0].Title, "Todo State")
 	}
-	if strings.Contains(sections[0].Content, "done") {
-		t.Fatalf("expected terminal todo filtered, got %q", sections[0].Content)
+	if !strings.Contains(sections[0].Content, "terminal_summary:") {
+		t.Fatalf("expected terminal summary section, got %q", sections[0].Content)
+	}
+	if !strings.Contains(sections[0].Content, `- [completed] id="done"`) {
+		t.Fatalf("expected completed todo in terminal summary, got %q", sections[0].Content)
 	}
 	lines := strings.Split(sections[0].Content, "\n")
 	if len(lines) < 2 || !strings.Contains(lines[0], "in-progress") {
@@ -97,8 +100,14 @@ func TestTodosSourceSectionsAllTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sections() error = %v", err)
 	}
-	if sections != nil {
-		t.Fatalf("Sections() = %+v, want nil for all terminal todos", sections)
+	if len(sections) != 1 {
+		t.Fatalf("Sections() len = %d, want 1 for terminal summary", len(sections))
+	}
+	if !strings.Contains(sections[0].Content, "terminal_summary:") {
+		t.Fatalf("expected terminal_summary in content, got %q", sections[0].Content)
+	}
+	if !strings.Contains(sections[0].Content, `- [failed] id="fail"`) {
+		t.Fatalf("expected failed todo in terminal summary, got %q", sections[0].Content)
 	}
 }
 

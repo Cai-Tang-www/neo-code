@@ -171,6 +171,27 @@ func TestToolExecuteErrorFormattingAndTruncation(t *testing.T) {
 	}
 }
 
+func TestToolDescriptionAndSchemaShellHints(t *testing.T) {
+	t.Parallel()
+
+	powerShellTool := New(t.TempDir(), "powershell", 3*time.Second)
+	if !strings.Contains(strings.ToLower(powerShellTool.Description()), "powershell") {
+		t.Fatalf("powershell description should mention shell, got %q", powerShellTool.Description())
+	}
+	powerShellSchema := powerShellTool.Schema()
+	powerShellProps, _ := powerShellSchema["properties"].(map[string]any)
+	commandSchema, _ := powerShellProps["command"].(map[string]any)
+	commandDesc, _ := commandSchema["description"].(string)
+	if !strings.Contains(strings.ToLower(commandDesc), "powershell") {
+		t.Fatalf("powershell schema should mention powershell syntax, got %q", commandDesc)
+	}
+
+	bashTool := New(t.TempDir(), "bash", 3*time.Second)
+	if !strings.Contains(strings.ToLower(bashTool.Description()), "bash") {
+		t.Fatalf("bash description should mention shell, got %q", bashTool.Description())
+	}
+}
+
 func mustMarshalArgs(t *testing.T, value any) []byte {
 	t.Helper()
 

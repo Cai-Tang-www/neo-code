@@ -83,6 +83,11 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Operation = "todo_write"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "id")
+	case "spawn_subagent":
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = "spawn_subagent"
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractStringArgument(input.Arguments, "id")
 	case "memo_remember":
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "memo_remember"

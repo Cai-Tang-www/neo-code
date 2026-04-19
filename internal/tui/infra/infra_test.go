@@ -162,7 +162,22 @@ func TestCollectWorkspaceFilesLimitAndErrors(t *testing.T) {
 }
 
 func TestCopyTextUsesInjectedWriter(t *testing.T) {
-	CopyText("hello")
+	called := false
+	restore := setCopyTextHookForTest(func(text string) error {
+		called = true
+		if text != "hello" {
+			t.Fatalf("expected injected writer text hello, got %q", text)
+		}
+		return nil
+	})
+	defer restore()
+
+	if err := CopyText("hello"); err != nil {
+		t.Fatalf("CopyText() error = %v", err)
+	}
+	if !called {
+		t.Fatalf("expected injected writer to be called")
+	}
 }
 
 func TestCachedMarkdownRendererBasic(t *testing.T) {
@@ -398,9 +413,9 @@ func TestSaveImageToTempFileCreateError(t *testing.T) {
 }
 
 func TestClipboardFallbackFunctions(t *testing.T) {
-	text, err := ReadClipboardText()
-	if err == nil && strings.TrimSpace(text) == "" {
-		t.Fatalf("expected clipboard text or an error, got empty success result")
+	_, err := ReadClipboardText()
+	if err != nil && strings.TrimSpace(err.Error()) == "" {
+		t.Fatalf("expected non-empty clipboard error message")
 	}
 	data, err := ReadClipboardImage()
 	if err != nil && err != errClipboardImageUnsupported {

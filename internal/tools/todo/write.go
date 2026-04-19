@@ -103,6 +103,7 @@ func (t *Tool) Schema() map[string]any {
 					actionClaim,
 					actionComplete,
 					actionFail,
+					actionRetry,
 				},
 			},
 			"items": map[string]any{
@@ -239,6 +240,10 @@ func (t *Tool) Schema() map[string]any {
 				"properties": map[string]any{"action": map[string]any{"const": actionFail}},
 				"required":   []string{"action", "id"},
 			},
+			map[string]any{
+				"properties": map[string]any{"action": map[string]any{"const": actionRetry}},
+				"required":   []string{"action", "id"},
+			},
 		},
 	}
 }
@@ -321,6 +326,11 @@ func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) error {
 			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionFail)
 		}
 		return call.SessionMutator.FailTodo(input.ID, input.Reason, input.ExpectedRevision)
+	case actionRetry:
+		if input.ID == "" {
+			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionRetry)
+		}
+		return call.SessionMutator.RetryTodo(input.ID, input.ExpectedRevision)
 	default:
 		return fmt.Errorf("todo_write: unsupported action %q", input.Action)
 	}

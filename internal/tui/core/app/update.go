@@ -1007,6 +1007,14 @@ var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentrun
 	agentruntime.EventStopReasonDecided:                        runtimeEventStopReasonDecidedHandler,
 	agentruntime.EventTodoUpdated:                              runtimeEventTodoUpdatedHandler,
 	agentruntime.EventTodoConflict:                             runtimeEventTodoConflictHandler,
+	agentruntime.EventSubAgentTaskStarted:                      runtimeEventSubAgentTaskLifecycleHandler,
+	agentruntime.EventSubAgentTaskProgress:                     runtimeEventSubAgentTaskLifecycleHandler,
+	agentruntime.EventSubAgentTaskRetried:                      runtimeEventSubAgentTaskLifecycleHandler,
+	agentruntime.EventSubAgentTaskBlocked:                      runtimeEventSubAgentTaskLifecycleHandler,
+	agentruntime.EventSubAgentTaskCompleted:                    runtimeEventSubAgentTaskLifecycleHandler,
+	agentruntime.EventSubAgentTaskFailed:                       runtimeEventSubAgentTaskLifecycleHandler,
+	agentruntime.EventSubAgentTaskCanceled:                     runtimeEventSubAgentTaskLifecycleHandler,
+	agentruntime.EventSubAgentDispatchFinished:                 runtimeEventSubAgentDispatchFinishedHandler,
 }
 
 func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bool {
@@ -1106,6 +1114,89 @@ func runtimeEventTodoConflictHandler(a *App, event agentruntime.RuntimeEvent) bo
 	return false
 }
 
+// runtimeEventSubAgentTaskLifecycleHandler 同步子代理任务事件到 Todo 面板，确保调度过程可实时观测。
+func runtimeEventSubAgentTaskLifecycleHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := parseSubAgentEventPayload(event.Payload)
+	if !ok {
+		return false
+	}
+
+	sessionID := strings.TrimSpace(event.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(a.state.ActiveSessionID)
+	}
+	if sessionID != "" && strings.EqualFold(sessionID, strings.TrimSpace(a.state.ActiveSessionID)) {
+		if err := a.refreshTodosFromSession(sessionID); err != nil {
+			a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
+		}
+	}
+
+	taskID := strings.TrimSpace(payload.TaskID)
+	if taskID == "" {
+		taskID = "unknown-task"
+	}
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = strings.TrimSpace(payload.Error)
+	}
+	if reason == "" {
+		reason = "ok"
+	}
+	detail := fmt.Sprintf("task=%s attempt=%d reason=%s", taskID, payload.Attempts, reason)
+
+	title := "Subagent task updated"
+	isError := false
+	switch event.Type {
+	case agentruntime.EventSubAgentTaskStarted:
+		title = "Subagent task started"
+		a.setRunProgress(0.68, "Running subagent")
+	case agentruntime.EventSubAgentTaskProgress:
+		title = "Subagent task progress"
+		a.setRunProgress(0.72, "Subagent progressing")
+	case agentruntime.EventSubAgentTaskRetried:
+		title = "Subagent task retried"
+	case agentruntime.EventSubAgentTaskBlocked:
+		title = "Subagent task blocked"
+	case agentruntime.EventSubAgentTaskCompleted:
+		title = "Subagent task completed"
+		a.setRunProgress(0.78, "Subagent completed")
+	case agentruntime.EventSubAgentTaskFailed:
+		title = "Subagent task failed"
+		isError = true
+	case agentruntime.EventSubAgentTaskCanceled:
+		title = "Subagent task canceled"
+		isError = true
+	}
+	a.appendActivity("subagent", title, detail, isError)
+	return false
+}
+
+// runtimeEventSubAgentDispatchFinishedHandler 记录一次 dispatch 轮次结束，并刷新 Todo 面板。
+func runtimeEventSubAgentDispatchFinishedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	payload, ok := parseSubAgentEventPayload(event.Payload)
+	if !ok {
+		return false
+	}
+
+	sessionID := strings.TrimSpace(event.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(a.state.ActiveSessionID)
+	}
+	if sessionID != "" && strings.EqualFold(sessionID, strings.TrimSpace(a.state.ActiveSessionID)) {
+		if err := a.refreshTodosFromSession(sessionID); err != nil {
+			a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
+		}
+	}
+
+	a.appendActivity(
+		"subagent",
+		"Subagent dispatch finished",
+		fmt.Sprintf("queue=%d running=%d reason=%s", payload.QueueSize, payload.Running, strings.TrimSpace(payload.Reason)),
+		false,
+	)
+	return false
+}
+
 func parseTodoEventPayload(payload any) (agentruntime.TodoEventPayload, bool) {
 	switch typed := payload.(type) {
 	case agentruntime.TodoEventPayload:
@@ -1137,6 +1228,68 @@ func parseTodoEventPayload(payload any) (agentruntime.TodoEventPayload, bool) {
 		return agentruntime.TodoEventPayload{Action: action, Reason: reason}, true
 	default:
 		return agentruntime.TodoEventPayload{}, false
+	}
+}
+
+// parseSubAgentEventPayload 解析子代理事件载荷，兼容结构体与 map 形式。
+func parseSubAgentEventPayload(payload any) (agentruntime.SubAgentEventPayload, bool) {
+	switch typed := payload.(type) {
+	case agentruntime.SubAgentEventPayload:
+		return typed, true
+	case *agentruntime.SubAgentEventPayload:
+		if typed == nil {
+			return agentruntime.SubAgentEventPayload{}, false
+		}
+		return *typed, true
+	case map[string]any:
+		taskID := ""
+		reason := ""
+		errorText := ""
+		attempts := 0
+		queueSize := 0
+		running := 0
+		if raw, ok := typed["task_id"]; ok && raw != nil {
+			taskID = strings.TrimSpace(fmt.Sprintf("%v", raw))
+		}
+		if raw, ok := typed["reason"]; ok && raw != nil {
+			reason = strings.TrimSpace(fmt.Sprintf("%v", raw))
+		}
+		if raw, ok := typed["error"]; ok && raw != nil {
+			errorText = strings.TrimSpace(fmt.Sprintf("%v", raw))
+		}
+		if raw, ok := typed["attempts"]; ok && raw != nil {
+			attempts = parsePayloadInt(raw)
+		}
+		if raw, ok := typed["queue_size"]; ok && raw != nil {
+			queueSize = parsePayloadInt(raw)
+		}
+		if raw, ok := typed["running"]; ok && raw != nil {
+			running = parsePayloadInt(raw)
+		}
+		return agentruntime.SubAgentEventPayload{
+			TaskID:    taskID,
+			Reason:    reason,
+			Error:     errorText,
+			Attempts:  attempts,
+			QueueSize: queueSize,
+			Running:   running,
+		}, true
+	default:
+		return agentruntime.SubAgentEventPayload{}, false
+	}
+}
+
+// parsePayloadInt 将事件 payload 中的数字字段安全转换为 int。
+func parsePayloadInt(raw any) int {
+	switch value := raw.(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
 	}
 }
 

@@ -74,6 +74,8 @@ type Task struct {
 	ID             string
 	Goal           string
 	ExpectedOutput string
+	FailureReason  string
+	RetryCount     int
 	Workspace      string
 	RunID          string
 	SessionID      string

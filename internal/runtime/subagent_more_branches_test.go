@@ -102,7 +102,7 @@ func TestSubAgentFactoryNilReceiverBranches(t *testing.T) {
 func TestEmitSubAgentFailedNilServiceNoPanic(t *testing.T) {
 	t.Parallel()
 
-	emitSubAgentFailed(nil, context.Background(), "run", "session", subagent.RoleCoder, "task", errors.New("boom"))
+	emitSubAgentFailed(nil, context.Background(), "run", "session", subagent.RoleCoder, "task", 1, errors.New("boom"))
 }
 
 func TestSubAgentRuntimeToolExecutorListToolSpecsError(t *testing.T) {

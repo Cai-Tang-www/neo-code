@@ -657,6 +657,73 @@ func TestSchedulerRunRetryAndGiveUp(t *testing.T) {
 	}
 }
 
+func TestSchedulerRunApprovalPendingKeepsBlocked(t *testing.T) {
+	t.Parallel()
+
+	store := newSchedulerStore(t, []agentsession.TodoItem{
+		{ID: "r1", Content: "wait approval", RetryLimit: 2},
+	})
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return StepOutput{}, errors.New("runtime: permission approval pending")
+	})
+
+	var events []SchedulerEvent
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{
+		MaxConcurrency: 1,
+		MaxRetries:     2,
+		PollInterval:   2 * time.Millisecond,
+		Backoff: func(attempt int) time.Duration {
+			_ = attempt
+			return 50 * time.Millisecond
+		},
+		DispatchOnce: true,
+		Observer: func(event SchedulerEvent) {
+			events = append(events, event)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := scheduler.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v, want empty", result.Failed)
+	}
+	if len(result.Retried) != 0 {
+		t.Fatalf("Retried = %v, want empty", result.Retried)
+	}
+
+	item, ok := store.FindTodo("r1")
+	if !ok {
+		t.Fatalf("FindTodo(r1) not found")
+	}
+	if item.Status != agentsession.TodoStatusBlocked {
+		t.Fatalf("status = %q, want blocked", item.Status)
+	}
+	if item.RetryCount != 0 {
+		t.Fatalf("retry_count = %d, want 0", item.RetryCount)
+	}
+	if item.NextRetryAt.IsZero() {
+		t.Fatalf("next_retry_at should be set for approval pending")
+	}
+	if item.FailureReason != schedulerReasonApprovalPending {
+		t.Fatalf("failure_reason = %q, want %q", item.FailureReason, schedulerReasonApprovalPending)
+	}
+	if !hasEvent(events, SchedulerEventBlocked, "r1") {
+		t.Fatalf("events should contain blocked for r1")
+	}
+}
+
 func TestSchedulerRunRecoveryFromInProgress(t *testing.T) {
 	t.Parallel()
 
@@ -1664,6 +1731,14 @@ func TestSchedulerHelpersCoverage(t *testing.T) {
 	outcome = taskOutcome{result: Result{Error: " failed "}}
 	if got := resolveTaskFailureReason(outcome); got != "failed" {
 		t.Fatalf("resolveTaskFailureReason(result) = %q, want failed", got)
+	}
+	outcome = taskOutcome{err: errors.New("runtime: permission approval pending")}
+	if got := resolveTaskFailureReason(outcome); got != schedulerReasonApprovalPending {
+		t.Fatalf("resolveTaskFailureReason(approval pending) = %q, want %q", got, schedulerReasonApprovalPending)
+	}
+	outcome = taskOutcome{result: Result{Error: "approval_pending: request_id=req-1"}}
+	if got := resolveTaskFailureReason(outcome); got != schedulerReasonApprovalPending {
+		t.Fatalf("resolveTaskFailureReason(result approval pending) = %q, want %q", got, schedulerReasonApprovalPending)
 	}
 	if got := resolveTaskFailureReason(taskOutcome{}); got == "" {
 		t.Fatalf("resolveTaskFailureReason() should return fallback")

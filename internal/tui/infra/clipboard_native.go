@@ -19,6 +19,9 @@ func initClipboard() error {
 }
 
 func CopyText(text string) error {
+	if handled, err := runCopyTextHook(text); handled {
+		return err
+	}
 	if err := initClipboard(); err != nil {
 		return err
 	}

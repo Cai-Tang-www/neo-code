@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,17 +58,20 @@ func TestSubAgentEngineHelperFunctions(t *testing.T) {
 		t.Fatalf("normalizeSubAgentToolCall() = %+v", call)
 	}
 
-	if !isRecoverableSubAgentToolError(nil) {
+	if !isRecoverableSubAgentToolError(nil, subagent.ToolExecutionResult{}) {
 		t.Fatalf("nil error should be recoverable")
 	}
-	if isRecoverableSubAgentToolError(errors.New("boom")) {
+	if isRecoverableSubAgentToolError(errors.New("boom"), subagent.ToolExecutionResult{}) {
 		t.Fatalf("generic error should not be recoverable")
 	}
-	if !isRecoverableSubAgentToolError(permissionDecisionDenyError(t)) {
+	if !isRecoverableSubAgentToolError(permissionDecisionDenyError(t), subagent.ToolExecutionResult{}) {
 		t.Fatalf("permission decision error should be recoverable")
 	}
-	if !isRecoverableSubAgentToolError(fmt.Errorf("wrapped: %w", tools.ErrPermissionDenied)) {
+	if !isRecoverableSubAgentToolError(fmt.Errorf("wrapped: %w", tools.ErrPermissionDenied), subagent.ToolExecutionResult{}) {
 		t.Fatalf("wrapped permission denied should be recoverable")
+	}
+	if !isRecoverableSubAgentToolError(errors.New("exit status 1"), subagent.ToolExecutionResult{IsError: true}) {
+		t.Fatalf("structured tool error should be recoverable")
 	}
 	if !isSubAgentPermissionDeniedError(errors.New(permissionRejectedErrorMessage)) {
 		t.Fatalf("permission rejected message should be recognized")
@@ -85,6 +89,8 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 			ID:             "task-init",
 			Goal:           "goal",
 			ExpectedOutput: "expected",
+			FailureReason:  "last failure",
+			RetryCount:     2,
 			ContextSlice: subagent.TaskContextSlice{
 				TaskID: "task-init",
 				Goal:   "context",
@@ -92,12 +98,15 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 		},
 		Workdir: "/tmp/workdir",
 		Trace:   []string{"  one ", "", "two"},
-	})
+	}, "powershell")
 	if len(messages) != 1 {
 		t.Fatalf("len(messages) = %d, want 1", len(messages))
 	}
 	if text := messages[0].Parts[0].Text; text == "" {
 		t.Fatalf("expected non-empty initial message")
+	}
+	if text := messages[0].Parts[0].Text; !containsAll(text, []string{"runtime_shell: powershell", "retry_count: 2", "last_failure_reason: last failure"}) {
+		t.Fatalf("initial message should include shell/retry/failure context, got %q", text)
 	}
 
 	if _, err := extractSubAgentJSONObject("{\"summary\":"); err == nil {
@@ -106,6 +115,28 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 	if _, err := extractSubAgentJSONObject("no json"); err == nil {
 		t.Fatalf("expected missing json error")
 	}
+}
+
+func TestBuildSubAgentSystemPromptShellGuidance(t *testing.T) {
+	t.Parallel()
+
+	policy, err := subagent.DefaultRolePolicy(subagent.RoleCoder)
+	if err != nil {
+		t.Fatalf("DefaultRolePolicy() error = %v", err)
+	}
+	prompt := buildSubAgentSystemPrompt(policy, []string{"bash"}, "powershell")
+	if !containsAll(prompt, []string{"PowerShell", "禁止 Bash 专属写法", "&&"}) {
+		t.Fatalf("prompt should include powershell guidance, got %q", prompt)
+	}
+}
+
+func containsAll(text string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if !strings.Contains(text, pattern) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRuntimeSubAgentResolveSettingsAndToolExecutorEdges(t *testing.T) {
