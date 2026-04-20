@@ -293,6 +293,7 @@ func TestNetworkServerSSELimitAndWriteErrorBranches(t *testing.T) {
 		t.Fatalf("dial first ws: %v", err)
 	}
 	defer func() { _ = firstConn.Close() }()
+	waitForActiveWSConnections(t, server, 1)
 
 	sseResponse, err := http.Get("http://" + listenAddress + "/sse?method=gateway.ping&id=sse-limit")
 	if err != nil {
@@ -311,6 +312,30 @@ func TestNetworkServerSSELimitAndWriteErrorBranches(t *testing.T) {
 	err = server.writeSSEEvent(failingWriter, failingWriter, "result", map[string]any{"bad": make(chan int)})
 	if err == nil {
 		t.Fatal("expected writeSSEEvent marshal failure")
+	}
+}
+
+func waitForActiveWSConnections(t *testing.T, server *NetworkServer, expected int) {
+	t.Helper()
+	timeout := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			server.mu.Lock()
+			got := len(server.wsConns)
+			server.mu.Unlock()
+			t.Fatalf("timed out waiting for ws connections: got %d, want %d", got, expected)
+		case <-ticker.C:
+			server.mu.Lock()
+			got := len(server.wsConns)
+			server.mu.Unlock()
+			if got == expected {
+				return
+			}
+		}
 	}
 }
 
