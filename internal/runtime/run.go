@@ -74,7 +74,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	var statePtr *runState
 
 	runCtx, cancel := context.WithCancel(ctx)
-	runToken := s.startRun(cancel)
+	runToken := s.startRun(cancel, input.RunID)
 	defer func() {
 		cancel()
 		s.finishRun(runToken)
@@ -311,6 +311,10 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	if err != nil {
 		return turnSnapshot{}, false, err
 	}
+	providerRuntimeCfg, err := resolvedProvider.ToRuntimeConfig()
+	if err != nil {
+		return turnSnapshot{}, false, err
+	}
 
 	state.mu.Lock()
 	streak := state.progress.LastScore.NoProgressStreak
@@ -327,7 +331,7 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	model := strings.TrimSpace(cfg.CurrentModel)
 	return turnSnapshot{
 		config:                cfg,
-		providerConfig:        resolvedProvider.ToRuntimeConfig(),
+		providerConfig:        providerRuntimeCfg,
 		model:                 model,
 		workdir:               activeWorkdir,
 		toolTimeout:           time.Duration(cfg.ToolTimeoutSec) * time.Second,

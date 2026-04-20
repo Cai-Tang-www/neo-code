@@ -100,9 +100,6 @@ func NormalizeProviderProtocolSettings(
 		return NormalizedProtocolSettings{}, err
 	}
 
-	if settings.ChatEndpointPath == "" {
-		settings.ChatEndpointPath = defaultChatEndpointPath(settings.ChatProtocol)
-	}
 	if settings.DiscoveryEndpointPath == "" {
 		settings.DiscoveryEndpointPath = defaultDiscoveryEndpointPath(settings.DiscoveryProtocol)
 	}

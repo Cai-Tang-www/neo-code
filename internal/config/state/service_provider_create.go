@@ -2,8 +2,10 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,12 +14,13 @@ import (
 
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 )
 
 var persistUserEnvVarForCreate = config.PersistUserEnvVar
 var deleteUserEnvVarForCreate = config.DeleteUserEnvVar
 var lookupUserEnvVarForCreate = config.LookupUserEnvVar
-var saveCustomProviderForCreate = config.SaveCustomProvider
+var saveCustomProviderWithModelsForCreate = config.SaveCustomProviderWithModels
 
 const providerCreateRollbackReloadTimeout = 3 * time.Second
 const providerCreateCrossProcessLockName = ".provider-create.lock"
@@ -28,29 +31,27 @@ const providerCreateCrossProcessLockHeartbeatInterval = 2 * time.Second
 
 // CreateCustomProviderInput 定义新增自定义 Provider 所需的输入参数。
 type CreateCustomProviderInput struct {
-	Name                     string
-	Driver                   string
-	BaseURL                  string
-	APIKeyEnv                string
-	APIKey                   string
-	APIStyle                 string
-	DeploymentMode           string
-	APIVersion               string
-	DiscoveryEndpointPath    string
-	DiscoveryResponseProfile string
+	Name                  string
+	Driver                string
+	BaseURL               string
+	ChatEndpointPath      string
+	APIKeyEnv             string
+	APIKey                string
+	ModelSource           string
+	ManualModelsJSON      string
+	DiscoveryEndpointPath string
 }
 
 type createCustomProviderNormalizedInput struct {
-	Name                     string
-	Driver                   string
-	BaseURL                  string
-	APIKeyEnv                string
-	APIKey                   string
-	APIStyle                 string
-	DeploymentMode           string
-	APIVersion               string
-	DiscoveryEndpointPath    string
-	DiscoveryResponseProfile string
+	Name                  string
+	Driver                string
+	BaseURL               string
+	ChatEndpointPath      string
+	APIKeyEnv             string
+	APIKey                string
+	ModelSource           string
+	ManualModels          []providertypes.ModelDescriptor
+	DiscoveryEndpointPath string
 }
 
 type providerConfigSnapshot struct {
@@ -128,18 +129,16 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 	}
 
 	providerSaveAttempted = true
-	if err := saveCustomProviderForCreate(
-		s.manager.BaseDir(),
-		normalized.Name,
-		normalized.Driver,
-		normalized.BaseURL,
-		normalized.APIKeyEnv,
-		normalized.APIStyle,
-		normalized.DeploymentMode,
-		normalized.APIVersion,
-		normalized.DiscoveryEndpointPath,
-		normalized.DiscoveryResponseProfile,
-	); err != nil {
+	if err := saveCustomProviderWithModelsForCreate(s.manager.BaseDir(), config.SaveCustomProviderInput{
+		Name:                  normalized.Name,
+		Driver:                normalized.Driver,
+		BaseURL:               normalized.BaseURL,
+		ChatEndpointPath:      normalized.ChatEndpointPath,
+		APIKeyEnv:             normalized.APIKeyEnv,
+		ModelSource:           normalized.ModelSource,
+		Models:                normalized.ManualModels,
+		DiscoveryEndpointPath: normalized.DiscoveryEndpointPath,
+	}); err != nil {
 		return Selection{}, rollback(fmt.Errorf("selection: save provider config: %w", err))
 	}
 	providerSaved = true
@@ -169,16 +168,17 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 // normalizeCreateCustomProviderInput 统一裁剪新增 Provider 输入并执行基础字段校验。
 func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (createCustomProviderNormalizedInput, error) {
 	normalized := createCustomProviderNormalizedInput{
-		Name:                     strings.TrimSpace(input.Name),
-		Driver:                   strings.TrimSpace(input.Driver),
-		BaseURL:                  strings.TrimSpace(input.BaseURL),
-		APIKeyEnv:                strings.TrimSpace(input.APIKeyEnv),
-		APIKey:                   strings.TrimSpace(input.APIKey),
-		APIStyle:                 strings.TrimSpace(input.APIStyle),
-		DeploymentMode:           strings.TrimSpace(input.DeploymentMode),
-		APIVersion:               strings.TrimSpace(input.APIVersion),
-		DiscoveryEndpointPath:    strings.TrimSpace(input.DiscoveryEndpointPath),
-		DiscoveryResponseProfile: strings.TrimSpace(input.DiscoveryResponseProfile),
+		Name:                  strings.TrimSpace(input.Name),
+		Driver:                strings.TrimSpace(input.Driver),
+		BaseURL:               strings.TrimSpace(input.BaseURL),
+		ChatEndpointPath:      strings.TrimSpace(input.ChatEndpointPath),
+		APIKeyEnv:             strings.TrimSpace(input.APIKeyEnv),
+		APIKey:                strings.TrimSpace(input.APIKey),
+		ModelSource:           provider.NormalizeModelSource(strings.TrimSpace(input.ModelSource)),
+		DiscoveryEndpointPath: strings.TrimSpace(input.DiscoveryEndpointPath),
+	}
+	if rawModelSource := strings.TrimSpace(input.ModelSource); rawModelSource != "" && normalized.ModelSource == "" {
+		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: unsupported model source %q", input.ModelSource)
 	}
 
 	if err := config.ValidateCustomProviderName(normalized.Name); err != nil {
@@ -196,36 +196,115 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 	if config.IsProtectedEnvVarName(normalized.APIKeyEnv) {
 		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: env key %q is protected", normalized.APIKeyEnv)
 	}
+	if normalized.ModelSource == "" {
+		normalized.ModelSource = provider.ModelSourceDiscover
+	}
 	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
 		normalized.Driver,
 		"",
-		"",
+		normalized.ChatEndpointPath,
 		"",
 		normalized.DiscoveryEndpointPath,
 		"",
 		"",
-		normalized.APIStyle,
-		normalized.DiscoveryResponseProfile,
+		"",
+		"",
 	)
 	if err != nil {
 		return createCustomProviderNormalizedInput{}, err
 	}
-	if normalized.Driver == provider.DriverOpenAICompat {
-		normalized.APIStyle = normalizedProtocols.LegacyAPIStyle
-	} else {
-		normalized.APIStyle = ""
+	normalized.ChatEndpointPath = normalizedProtocols.ChatEndpointPath
+	switch provider.NormalizeModelSource(normalized.ModelSource) {
+	case provider.ModelSourceManual:
+		manualModels, parseErr := parseManualModelsJSON(input.ManualModelsJSON)
+		if parseErr != nil {
+			return createCustomProviderNormalizedInput{}, parseErr
+		}
+		normalized.ManualModels = manualModels
+		normalized.DiscoveryEndpointPath = ""
+	case provider.ModelSourceDiscover:
+		normalized.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
+	default:
+		return createCustomProviderNormalizedInput{}, fmt.Errorf("selection: unsupported model source %q", input.ModelSource)
 	}
-	normalized.DiscoveryEndpointPath = normalizedProtocols.DiscoveryEndpointPath
-	normalized.DiscoveryResponseProfile = normalizedProtocols.ResponseProfile
 
 	return normalized, nil
+}
+
+type manualModelJSON struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	ContextWindow   *int   `json:"context_window,omitempty"`
+	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
+}
+
+// parseManualModelsJSON 解析并校验手工模型 JSON，确保至少包含一个合法模型且 id/name 必填。
+func parseManualModelsJSON(raw string) ([]providertypes.ModelDescriptor, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, errors.New("selection: manual model json is empty")
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	var models []manualModelJSON
+	if err := decoder.Decode(&models); err != nil {
+		return nil, fmt.Errorf("selection: parse manual model json: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("selection: parse manual model json: unexpected trailing content")
+	}
+	if len(models) == 0 {
+		return nil, errors.New("selection: manual model list is empty")
+	}
+
+	descriptors := make([]providertypes.ModelDescriptor, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for index, model := range models {
+		id := strings.TrimSpace(model.ID)
+		name := strings.TrimSpace(model.Name)
+		if id == "" {
+			return nil, fmt.Errorf("selection: models[%d].id is required", index)
+		}
+		if name == "" {
+			return nil, fmt.Errorf("selection: models[%d].name is required", index)
+		}
+		key := provider.NormalizeKey(id)
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("selection: models[%d].id %q is duplicated", index, id)
+		}
+		seen[key] = struct{}{}
+
+		descriptor := providertypes.ModelDescriptor{
+			ID:   id,
+			Name: name,
+		}
+		if model.ContextWindow != nil {
+			if *model.ContextWindow <= 0 {
+				return nil, fmt.Errorf("selection: models[%d].context_window must be greater than 0", index)
+			}
+			descriptor.ContextWindow = *model.ContextWindow
+		}
+		if model.MaxOutputTokens != nil {
+			if *model.MaxOutputTokens <= 0 {
+				return nil, fmt.Errorf("selection: models[%d].max_output_tokens must be greater than 0", index)
+			}
+			descriptor.MaxOutputTokens = *model.MaxOutputTokens
+		}
+		descriptors = append(descriptors, descriptor)
+	}
+	return providertypes.MergeModelDescriptors(descriptors), nil
 }
 
 // validateCustomProviderCreateConflict 校验新增 Provider 的名称与环境变量名是否与现有配置冲突。
 func validateCustomProviderCreateConflict(cfg config.Config, input createCustomProviderNormalizedInput) error {
 	existingProvider, err := cfg.ProviderByName(input.Name)
-	if err == nil && existingProvider.Source == config.ProviderSourceBuiltin {
-		return fmt.Errorf("selection: provider %q duplicates builtin provider", input.Name)
+	if err == nil {
+		if existingProvider.Source == config.ProviderSourceBuiltin {
+			return fmt.Errorf("selection: provider %q duplicates builtin provider", input.Name)
+		}
+		return fmt.Errorf("selection: provider %q already exists", input.Name)
 	}
 
 	targetProviderName := provider.NormalizeKey(input.Name)

@@ -149,7 +149,7 @@ func TestNormalizeProviderProtocolSettingsDefaults(t *testing.T) {
 		{
 			name:                  "openai defaults",
 			driver:                DriverOpenAICompat,
-			wantChatEndpoint:      "/chat/completions",
+			wantChatEndpoint:      "",
 			wantDiscoveryEndpoint: "/models",
 			wantAuthStrategy:      AuthStrategyBearer,
 			wantResponseProfile:   DiscoveryResponseProfileOpenAI,
@@ -157,7 +157,7 @@ func TestNormalizeProviderProtocolSettingsDefaults(t *testing.T) {
 		{
 			name:                  "anthropic defaults",
 			driver:                DriverAnthropic,
-			wantChatEndpoint:      "/messages",
+			wantChatEndpoint:      "",
 			wantDiscoveryEndpoint: "/models",
 			wantAuthStrategy:      AuthStrategyAnthropic,
 			wantResponseProfile:   DiscoveryResponseProfileGeneric,
@@ -167,7 +167,7 @@ func TestNormalizeProviderProtocolSettingsDefaults(t *testing.T) {
 			driver:                DriverGemini,
 			chatProtocol:          ChatProtocolOpenAIResponses,
 			discoveryProtocol:     DiscoveryProtocolGeminiModels,
-			wantChatEndpoint:      "/responses",
+			wantChatEndpoint:      "",
 			wantDiscoveryEndpoint: "/models",
 			wantAuthStrategy:      AuthStrategyBearer,
 			wantResponseProfile:   DiscoveryResponseProfileGemini,
@@ -206,5 +206,27 @@ func TestNormalizeProviderProtocolSettingsDefaults(t *testing.T) {
 				t.Fatalf("expected response profile %q, got %q", tt.wantResponseProfile, settings.ResponseProfile)
 			}
 		})
+	}
+}
+
+func TestNormalizeProviderProtocolSettingsPreservesExplicitChatEndpointPath(t *testing.T) {
+	t.Parallel()
+
+	settings, err := NormalizeProviderProtocolSettings(
+		DriverOpenAICompat,
+		ChatProtocolOpenAIChatCompletions,
+		"/v1/text/chatcompletion_v2",
+		DiscoveryProtocolOpenAIModels,
+		"/models",
+		AuthStrategyBearer,
+		DiscoveryResponseProfileOpenAI,
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("NormalizeProviderProtocolSettings() error = %v", err)
+	}
+	if settings.ChatEndpointPath != "/v1/text/chatcompletion_v2" {
+		t.Fatalf("expected explicit chat endpoint to be preserved, got %q", settings.ChatEndpointPath)
 	}
 }

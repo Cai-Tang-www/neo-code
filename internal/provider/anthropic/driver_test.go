@@ -16,33 +16,12 @@ func TestDriverBuildRejectsUnsupportedAnthropicMessages(t *testing.T) {
 
 	driver := Driver()
 	_, err := driver.Build(context.Background(), provider.RuntimeConfig{
-		Driver:       DriverName,
-		BaseURL:      "https://api.anthropic.com/v1",
-		APIKey:       "test-key",
-		ChatProtocol: provider.ChatProtocolAnthropicMessages,
-		AuthStrategy: provider.AuthStrategyAnthropic,
+		Driver:  DriverName,
+		BaseURL: "https://api.anthropic.com/v1",
+		APIKey:  "test-key",
 	})
 	if err == nil {
 		t.Fatal("expected unsupported anthropic messages error")
-	}
-}
-
-func TestDriverBuildSuccessWithOpenAICompatPath(t *testing.T) {
-	t.Parallel()
-
-	driver := Driver()
-	p, err := driver.Build(context.Background(), provider.RuntimeConfig{
-		Driver:       DriverName,
-		BaseURL:      "https://api.anthropic.com/v1",
-		APIKey:       "test-key",
-		ChatProtocol: provider.ChatProtocolOpenAIChatCompletions,
-		AuthStrategy: provider.AuthStrategyAnthropic,
-	})
-	if err != nil {
-		t.Fatalf("expected build success, got %v", err)
-	}
-	if p == nil {
-		t.Fatal("expected non-nil provider")
 	}
 }
 
@@ -74,10 +53,7 @@ func TestDriverDiscover(t *testing.T) {
 		Driver:                DriverName,
 		BaseURL:               server.URL,
 		APIKey:                "test-key",
-		DiscoveryProtocol:     provider.DiscoveryProtocolAnthropicModels,
-		ResponseProfile:       provider.DiscoveryResponseProfileGeneric,
 		DiscoveryEndpointPath: "/models",
-		AuthStrategy:          provider.AuthStrategyAnthropic,
 	})
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
@@ -97,27 +73,19 @@ func TestDriverValidateCatalogIdentity(t *testing.T) {
 
 		err := driver.ValidateCatalogIdentity(provider.ProviderIdentity{
 			Driver:                DriverName,
-			ChatProtocol:          provider.ChatProtocolAnthropicMessages,
-			DiscoveryProtocol:     provider.DiscoveryProtocolAnthropicModels,
 			DiscoveryEndpointPath: "/models",
-			AuthStrategy:          provider.AuthStrategyAnthropic,
-			ResponseProfile:       provider.DiscoveryResponseProfileGeneric,
 		})
 		if err != nil {
 			t.Fatalf("expected valid identity, got %v", err)
 		}
 	})
 
-	t.Run("invalid auth strategy for anthropic chat protocol", func(t *testing.T) {
+	t.Run("invalid discovery endpoint path", func(t *testing.T) {
 		t.Parallel()
 
 		err := driver.ValidateCatalogIdentity(provider.ProviderIdentity{
 			Driver:                DriverName,
-			ChatProtocol:          provider.ChatProtocolAnthropicMessages,
-			DiscoveryProtocol:     provider.DiscoveryProtocolAnthropicModels,
-			DiscoveryEndpointPath: "/models",
-			AuthStrategy:          provider.AuthStrategyBearer,
-			ResponseProfile:       provider.DiscoveryResponseProfileGeneric,
+			DiscoveryEndpointPath: "https://api.example.com/models",
 		})
 		if err == nil {
 			t.Fatal("expected discovery config error")
@@ -125,7 +93,7 @@ func TestDriverValidateCatalogIdentity(t *testing.T) {
 		if !provider.IsDiscoveryConfigError(err) {
 			t.Fatalf("expected discovery config error, got %v", err)
 		}
-		if !strings.Contains(err.Error(), "does not allow auth strategy") {
+		if !strings.Contains(err.Error(), "must be a relative path") {
 			t.Fatalf("unexpected error message: %v", err)
 		}
 	})

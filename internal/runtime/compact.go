@@ -164,7 +164,11 @@ func (s *Service) defaultCompactRunner(session agentsession.Session, cfg config.
 	if err != nil {
 		return nil, err
 	}
-	return contextcompact.NewRunner(newCompactSummaryGenerator(s.providerFactory, resolvedProvider.ToRuntimeConfig(), model)), nil
+	runtimeConfig, err := resolvedProvider.ToRuntimeConfig()
+	if err != nil {
+		return nil, err
+	}
+	return contextcompact.NewRunner(newCompactSummaryGenerator(s.providerFactory, runtimeConfig, model)), nil
 }
 
 // resolveCompactProviderSelection 优先复用会话最近成功运行时记录的 provider 与 model。
@@ -180,6 +184,7 @@ func resolveCompactProviderSelection(session agentsession.Session, cfg config.Co
 		if err != nil {
 			return config.ResolvedProviderConfig{}, "", err
 		}
+		resolved.SessionAssetLimits = cfg.Runtime.ResolveSessionAssetLimits()
 		return resolved, sessionModel, nil
 	}
 

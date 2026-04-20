@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,6 +129,8 @@ type Service struct {
 	activeRunToken     uint64
 	nextRunToken       uint64
 	activeRunCancels   map[uint64]context.CancelFunc
+	activeRunByID      map[string]uint64
+	activeRunTokenIDs  map[uint64]string
 	permissionAskMapMu sync.Mutex
 	permissionAskLocks map[string]*permissionAskLockEntry
 }
@@ -173,6 +176,8 @@ func NewWithFactory(
 		sessionLocks:       make(map[string]*sessionLockEntry),
 		permissionAskLocks: make(map[string]*permissionAskLockEntry),
 		activeRunCancels:   make(map[uint64]context.CancelFunc),
+		activeRunByID:      make(map[string]uint64),
+		activeRunTokenIDs:  make(map[uint64]string),
 	}
 }
 
@@ -209,6 +214,28 @@ func (s *Service) CancelActiveRun() bool {
 		return false
 	}
 
+	cancel()
+	return true
+}
+
+// CancelRun 按 run_id 精确取消指定运行任务。
+func (s *Service) CancelRun(runID string) bool {
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID == "" {
+		return false
+	}
+
+	s.runMu.Lock()
+	token, exists := s.activeRunByID[normalizedRunID]
+	if !exists {
+		s.runMu.Unlock()
+		return false
+	}
+	cancel := s.activeRunCancels[token]
+	s.runMu.Unlock()
+	if cancel == nil {
+		return false
+	}
 	cancel()
 	return true
 }

@@ -197,7 +197,6 @@ func TestDiscoverModelsParsesGeminiProfileModelList(t *testing.T) {
 	defer server.Close()
 
 	cfg := resolvedConfig(server.URL, "")
-	cfg.DiscoveryResponseProfile = provider.DiscoveryResponseProfileGemini
 	p, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -258,7 +257,6 @@ func TestDiscoverModelsOpenAIProfileFallsBackToGenericListKeys(t *testing.T) {
 	defer server.Close()
 
 	cfg := resolvedConfig(server.URL, "")
-	cfg.DiscoveryResponseProfile = provider.DiscoveryResponseProfileOpenAI
 	p, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -1241,6 +1239,72 @@ data: [DONE]
 	}
 }
 
+func TestGenerate_UsesDirectBaseURLWhenChatEndpointPathEmpty(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/text/chatcompletion_v2" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
+data: [DONE]
+
+`))
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL+"/v1/text/chatcompletion_v2", config.OpenAIDefaultModel)
+	cfg.ChatEndpointPath = ""
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	events := make(chan providertypes.StreamEvent, 4)
+	err = p.Generate(context.Background(), providertypes.GenerateRequest{
+		Model:    config.OpenAIDefaultModel,
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}},
+	}, events)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+}
+
+func TestGenerate_UsesDirectBaseURLWhenChatEndpointPathSlash(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/text/chatcompletion_v2" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
+data: [DONE]
+
+`))
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL+"/v1/text/chatcompletion_v2", config.OpenAIDefaultModel)
+	cfg.ChatEndpointPath = "/"
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	events := make(chan providertypes.StreamEvent, 4)
+	err = p.Generate(context.Background(), providertypes.GenerateRequest{
+		Model:    config.OpenAIDefaultModel,
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}},
+	}, events)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+}
+
 // --- parseError 边界测试 ---
 
 func TestParseError_ReadBodyFailure(t *testing.T) {
@@ -1429,11 +1493,11 @@ func TestProviderGenerateHTTPErrorResponses(t *testing.T) {
 	}
 }
 
-func TestProviderGenerateRejectsUnsupportedAPIStyle(t *testing.T) {
+func TestProviderGenerateRejectsUnsupportedDriverProtocol(t *testing.T) {
 	t.Parallel()
 
 	cfg := resolvedConfig(config.OpenAIDefaultBaseURL, config.OpenAIDefaultModel)
-	cfg.APIStyle = "responses"
+	cfg.Driver = provider.DriverAnthropic
 
 	p, err := New(cfg)
 	if err != nil {
@@ -1445,9 +1509,9 @@ func TestProviderGenerateRejectsUnsupportedAPIStyle(t *testing.T) {
 		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}},
 	}, make(chan providertypes.StreamEvent, 1))
 	if err == nil {
-		t.Fatal("expected unsupported api_style error")
+		t.Fatal("expected unsupported protocol error")
 	}
-	if !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
+	if !strings.Contains(err.Error(), "unsupported chat protocol") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1560,11 +1624,12 @@ func resolvedConfig(baseURL string, model string) provider.RuntimeConfig {
 		model = config.OpenAIDefaultModel
 	}
 	return provider.RuntimeConfig{
-		Name:         DriverName,
-		Driver:       DriverName,
-		BaseURL:      baseURL,
-		DefaultModel: model,
-		APIKey:       "test-key",
+		Name:             DriverName,
+		Driver:           DriverName,
+		BaseURL:          baseURL,
+		DefaultModel:     model,
+		APIKey:           "test-key",
+		ChatEndpointPath: "/chat/completions",
 	}
 }
 

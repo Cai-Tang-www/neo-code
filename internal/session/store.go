@@ -126,6 +126,7 @@ func NewSQLiteStore(baseDir string, workspaceRoot string) *SQLiteStore {
 		projectDir: projectDirectory(baseDir, workspaceRoot),
 		assetsDir:  assetsDirectory(baseDir, workspaceRoot),
 		dbPath:     databasePath(baseDir, workspaceRoot),
+		limits:     providertypes.DefaultSessionAssetLimits(),
 	}
 }
 

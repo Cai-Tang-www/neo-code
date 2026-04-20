@@ -32,5 +32,6 @@ func SetBearerAuthorization(header http.Header, apiKey string) {
 
 // ApplyAuthHeaders 根据 runtime 配置中的 auth strategy 写入鉴权头。
 func ApplyAuthHeaders(header http.Header, cfg provider.RuntimeConfig) {
-	provider.ApplyAuthHeaders(header, cfg.AuthStrategy, cfg.APIKey, cfg.APIVersion)
+	authStrategy, apiVersion := provider.ResolveDriverAuthConfig(cfg.Driver)
+	provider.ApplyAuthHeaders(header, authStrategy, cfg.APIKey, apiVersion)
 }

@@ -48,8 +48,31 @@ type SQLiteStore struct {
 	assetsDir  string
 	dbPath     string
 
-	initMu sync.Mutex
-	db     *sql.DB
+	initMu   sync.Mutex
+	db       *sql.DB
+	limitsMu sync.RWMutex
+	limits   providertypes.SessionAssetLimits
+}
+
+// SetSessionAssetLimits 设置会话附件大小限制；非法值会回退到默认并应用硬上限兜底。
+func (s *SQLiteStore) SetSessionAssetLimits(limits providertypes.SessionAssetLimits) {
+	if s == nil {
+		return
+	}
+	s.limitsMu.Lock()
+	s.limits = providertypes.NormalizeSessionAssetLimits(limits)
+	s.limitsMu.Unlock()
+}
+
+// sessionAssetLimits 返回当前生效的会话附件限制。
+func (s *SQLiteStore) sessionAssetLimits() providertypes.SessionAssetLimits {
+	if s == nil {
+		return providertypes.DefaultSessionAssetLimits()
+	}
+	s.limitsMu.RLock()
+	limits := s.limits
+	s.limitsMu.RUnlock()
+	return providertypes.NormalizeSessionAssetLimits(limits)
 }
 
 // Close 释放数据库连接，供测试和上层生命周期管理复用。
@@ -444,16 +467,17 @@ func (s *SQLiteStore) SaveAsset(ctx context.Context, sessionID string, r io.Read
 		return AssetMeta{}, err
 	}
 
-	written, copyErr := io.Copy(tempFile, io.LimitReader(r, providertypes.MaxSessionAssetBytes+1))
+	limits := s.sessionAssetLimits()
+	written, copyErr := io.Copy(tempFile, io.LimitReader(r, limits.MaxSessionAssetBytes+1))
 	syncErr := tempFile.Sync()
 	closeErr := tempFile.Close()
 	if copyErr != nil {
 		_ = os.Remove(tempPath)
 		return AssetMeta{}, fmt.Errorf("session: write temp asset: %w", copyErr)
 	}
-	if written > providertypes.MaxSessionAssetBytes {
+	if written > limits.MaxSessionAssetBytes {
 		_ = os.Remove(tempPath)
-		return AssetMeta{}, fmt.Errorf("session: asset size exceeds %d bytes", providertypes.MaxSessionAssetBytes)
+		return AssetMeta{}, fmt.Errorf("session: asset size exceeds %d bytes", limits.MaxSessionAssetBytes)
 	}
 	if syncErr != nil {
 		_ = os.Remove(tempPath)

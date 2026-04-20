@@ -431,6 +431,9 @@ func TestRPCDispatchAdditionalBranches(t *testing.T) {
 	if requiresSession(FrameActionPing) {
 		t.Fatal("ping should not require session")
 	}
+	if requiresSession(FrameActionResolvePermission) {
+		t.Fatal("resolve_permission should not require session")
+	}
 
 	ctx := context.Background()
 	frame := MessageFrame{Type: FrameTypeRequest, Action: FrameActionPing}

@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 
-	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 	tuistate "neo-code/internal/tui/state"
@@ -273,7 +272,7 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 	app.providerAddForm.Name = "team-gateway"
 	app.providerAddForm.APIKey = "sk-secret-98765"
 	app.providerAddForm.BaseURL = ""
-	app.providerAddForm.APIStyle = ""
+	app.providerAddForm.ChatEndpointPath = ""
 	app.providerAddForm.Error = "input invalid"
 	app.providerAddForm.ErrorIsHard = true
 
@@ -284,11 +283,14 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 	if !strings.Contains(form, "API Key: ******") {
 		t.Fatalf("expected masked api key, got %q", form)
 	}
+	if !strings.Contains(form, "Model Source: discover") {
+		t.Fatalf("expected model source field, got %q", form)
+	}
 	if !strings.Contains(form, "留空会自动填充默认地址") {
 		t.Fatalf("expected base url hint, got %q", form)
 	}
-	if !strings.Contains(form, "默认 chat_completions") {
-		t.Fatalf("expected api style hint, got %q", form)
+	if !strings.Contains(form, "留空或\"/\" 使用直连 base_url") {
+		t.Fatalf("expected chat endpoint direct-mode hint, got %q", form)
 	}
 	if !strings.Contains(form, "[Error] input invalid") {
 		t.Fatalf("expected hard error label, got %q", form)
@@ -305,6 +307,21 @@ func TestRenderProviderAddFormPromptLabel(t *testing.T) {
 	form := app.renderProviderAddForm()
 	if !strings.Contains(form, "[Prompt] continue input") {
 		t.Fatalf("expected prompt label, got %q", form)
+	}
+}
+
+func TestRenderProviderAddFormManualModelsStage(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startProviderAddForm()
+	app.providerAddForm.Stage = providerAddFormStageManualModels
+	app.providerAddForm.ManualModelsJSON = ""
+
+	form := app.renderProviderAddForm()
+	if !strings.Contains(form, "Manual Model JSON") {
+		t.Fatalf("expected manual model json title, got %q", form)
+	}
+	if !strings.Contains(form, "\"id\": \"model-id\"") {
+		t.Fatalf("expected manual model json template, got %q", form)
 	}
 }
 
@@ -490,18 +507,16 @@ func TestRenderMessageBlockWithCopyExtraBranches(t *testing.T) {
 	}
 }
 
-func TestRenderProviderAddFormNoFormAndGeminiField(t *testing.T) {
+func TestRenderProviderAddFormNoFormAndChatEndpointField(t *testing.T) {
 	app, _ := newTestApp(t)
 	if got := app.renderProviderAddForm(); got != "No form active" {
 		t.Fatalf("unexpected no-form output: %q", got)
 	}
 
 	app.startProviderAddForm()
-	app.providerAddForm.Driver = provider.DriverGemini
-	app.providerAddForm.DeploymentMode = "vertex"
 	form := app.renderProviderAddForm()
-	if !strings.Contains(form, "Deployment Mode") {
-		t.Fatalf("expected deployment mode field for gemini")
+	if !strings.Contains(form, "Chat Endpoint") {
+		t.Fatalf("expected chat endpoint field in add form")
 	}
 }
 

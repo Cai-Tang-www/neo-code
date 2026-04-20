@@ -98,6 +98,9 @@ func (p *Provider) ConsumeStream(
 			if flushErr := flushPendingData(); flushErr != nil {
 				return flushErr
 			}
+			if strings.TrimSpace(finishReason) != "" {
+				return finishStream()
+			}
 			return fmt.Errorf("%w: %w", provider.ErrStreamInterrupted, err)
 		}
 
@@ -128,6 +131,9 @@ func (p *Provider) ConsumeStream(
 				return flushErr
 			}
 			if done {
+				return finishStream()
+			}
+			if strings.TrimSpace(finishReason) != "" {
 				return finishStream()
 			}
 			if ctxErr := ctx.Err(); ctxErr != nil {

@@ -77,7 +77,7 @@ func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDes
 }
 
 // Generate 发起 SSE 流式生成请求。
-// 流中途断连或协议错误时直接返回错误，由上层调用方决定重试策略。
+// 流中断连或协议错误时直接返回错误，由上层调用方决定重试策略。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	if _, err := supportedChatProtocol(p.cfg); err != nil {
 		return err
@@ -90,56 +90,19 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 	return impl.Generate(ctx, req, events)
 }
 
-// normalizedAPIStyle 统一规范化 openaicompat 的 api_style，并为空值回退到 chat_completions。
-func normalizedAPIStyle(apiStyle string) string {
-	normalized := provider.NormalizeProviderAPIStyle(apiStyle)
-	if normalized == "" {
-		return provider.OpenAICompatibleAPIStyleChatCompletions
-	}
-	return normalized
-}
-
-// normalizedChatProtocol 统一解析 chat protocol，优先新字段并兼容旧 api_style 配置。
-func normalizedChatProtocol(cfg provider.RuntimeConfig) string {
-	if normalized := provider.NormalizeProviderChatProtocol(cfg.ChatProtocol); normalized != "" {
-		return normalized
-	}
-
-	normalizedLegacyAPIStyle := normalizedAPIStyle(cfg.APIStyle)
-	switch normalizedLegacyAPIStyle {
-	case provider.OpenAICompatibleAPIStyleResponses:
-		return provider.ChatProtocolOpenAIResponses
-	case provider.OpenAICompatibleAPIStyleChatCompletions, "":
-		return provider.ChatProtocolOpenAIChatCompletions
-	default:
-		return normalizedLegacyAPIStyle
-	}
-}
-
 // supportedChatProtocol 校验 openaicompat 当前支持的聊天协议。
 func supportedChatProtocol(cfg provider.RuntimeConfig) (string, error) {
-	normalized := normalizedChatProtocol(cfg)
-	usingLegacyAPIStyle := strings.TrimSpace(cfg.APIStyle) != ""
+	normalized := provider.ResolveDriverProtocolDefaults(cfg.Driver).ChatProtocol
 	switch normalized {
 	case provider.ChatProtocolOpenAIChatCompletions:
 		return normalized, nil
 	case provider.ChatProtocolOpenAIResponses:
-		if usingLegacyAPIStyle {
-			return "", provider.NewDiscoveryConfigError(
-				fmt.Sprintf("openaicompat provider: api_style %q is not supported yet", provider.OpenAICompatibleAPIStyleResponses),
-			)
-		}
 		return "", provider.NewDiscoveryConfigError(
-			fmt.Sprintf("openaicompat provider: chat_protocol %q is not supported yet", normalized),
+			fmt.Sprintf("openaicompat provider: driver %q currently does not support chat protocol %q", cfg.Driver, normalized),
 		)
 	default:
-		if usingLegacyAPIStyle {
-			return "", provider.NewDiscoveryConfigError(
-				fmt.Sprintf("openaicompat provider: unsupported api_style %q", normalizedAPIStyle(cfg.APIStyle)),
-			)
-		}
 		return "", provider.NewDiscoveryConfigError(
-			fmt.Sprintf("openaicompat provider: unsupported chat_protocol %q", normalized),
+			fmt.Sprintf("openaicompat provider: driver %q resolved unsupported chat protocol %q", cfg.Driver, normalized),
 		)
 	}
 }

@@ -29,8 +29,6 @@ func TestDriverDiscover(t *testing.T) {
 		Driver:                DriverName,
 		BaseURL:               server.URL,
 		APIKey:                "test-key",
-		DiscoveryProtocol:     provider.DiscoveryProtocolGeminiModels,
-		ResponseProfile:       provider.DiscoveryResponseProfileGemini,
 		DiscoveryEndpointPath: "/models",
 	})
 	if err != nil {
@@ -46,11 +44,9 @@ func TestDriverBuild(t *testing.T) {
 
 	driver := Driver()
 	p, err := driver.Build(context.Background(), provider.RuntimeConfig{
-		Driver:       DriverName,
-		BaseURL:      "https://generativelanguage.googleapis.com/v1beta/openai",
-		APIKey:       "test-key",
-		ChatProtocol: provider.ChatProtocolOpenAIChatCompletions,
-		AuthStrategy: provider.AuthStrategyBearer,
+		Driver:  DriverName,
+		BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+		APIKey:  "test-key",
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -70,27 +66,19 @@ func TestDriverValidateCatalogIdentity(t *testing.T) {
 
 		err := driver.ValidateCatalogIdentity(provider.ProviderIdentity{
 			Driver:                DriverName,
-			ChatProtocol:          provider.ChatProtocolOpenAIChatCompletions,
-			DiscoveryProtocol:     provider.DiscoveryProtocolGeminiModels,
 			DiscoveryEndpointPath: "/models",
-			AuthStrategy:          provider.AuthStrategyBearer,
-			ResponseProfile:       provider.DiscoveryResponseProfileGemini,
 		})
 		if err != nil {
 			t.Fatalf("expected valid identity, got %v", err)
 		}
 	})
 
-	t.Run("invalid discovery protocol", func(t *testing.T) {
+	t.Run("invalid discovery endpoint path", func(t *testing.T) {
 		t.Parallel()
 
 		err := driver.ValidateCatalogIdentity(provider.ProviderIdentity{
 			Driver:                DriverName,
-			ChatProtocol:          provider.ChatProtocolOpenAIChatCompletions,
-			DiscoveryProtocol:     "unknown-discovery",
-			DiscoveryEndpointPath: "/models",
-			AuthStrategy:          provider.AuthStrategyBearer,
-			ResponseProfile:       provider.DiscoveryResponseProfileGemini,
+			DiscoveryEndpointPath: "https://api.example.com/models",
 		})
 		if err == nil {
 			t.Fatal("expected discovery config error")
@@ -98,7 +86,7 @@ func TestDriverValidateCatalogIdentity(t *testing.T) {
 		if !provider.IsDiscoveryConfigError(err) {
 			t.Fatalf("expected discovery config error, got %v", err)
 		}
-		if !strings.Contains(err.Error(), "discovery protocol") {
+		if !strings.Contains(err.Error(), "must be a relative path") {
 			t.Fatalf("unexpected error message: %v", err)
 		}
 	})

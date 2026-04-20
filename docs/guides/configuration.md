@@ -39,6 +39,10 @@ shell: bash
 tool_timeout_sec: 20
 runtime:
   max_no_progress_streak: 3
+  max_repeat_cycle_streak: 3
+  assets:
+    max_session_asset_bytes: 20971520
+    max_session_assets_total_bytes: 20971520
 
 tools:
   webfetch:
@@ -90,6 +94,9 @@ context:
 | 字段 | 说明 |
 |------|------|
 | `runtime.max_no_progress_streak` | 连续”无进展”轮次熔断阈值，默认 `3`；streak 达到 `limit-1`（默认第 2 轮）时向模型注入一次系统级纠偏提示，达到 `limit`（默认第 3 轮）时终止运行 |
+| `runtime.max_repeat_cycle_streak` | 连续“重复调用同一工具参数”轮次熔断阈值，默认 `3`；达到阈值后终止运行 |
+| `runtime.assets.max_session_asset_bytes` | 单个 `session_asset` 最大原始字节数，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
+| `runtime.assets.max_session_assets_total_bytes` | 单次请求可携带的 `session_asset` 原始总字节上限，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 
 ### `tools` 字段
 
@@ -140,9 +147,47 @@ custom provider 通过单独文件声明，而不是写进 `config.yaml`：
 name: company-gateway
 driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
-openai_compatible:
-  base_url: https://llm.example.com/v1
-  api_style: chat_completions
+model_source: discover
+base_url: https://llm.example.com/v1
+chat_endpoint_path: /chat/completions
+discovery_endpoint_path: /models
+```
+
+`model_source` 语义如下：
+
+- `discover`（默认）：通过 discovery（如 `/models`）拉取模型列表。
+- `manual`：不触发 discovery，优先使用 `models` 中声明的模型列表。
+
+`manual` 模式示例：
+
+```yaml
+name: company-gateway-manual
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+model_source: manual
+base_url: https://llm.example.com/v1
+chat_endpoint_path: /chat/completions
+models:
+  - id: gpt-4o-mini
+    name: GPT-4o Mini
+    context_window: 128000
+```
+
+迁移与兼容性说明：
+
+- 老配置未声明 `model_source` 时，默认按 `discover` 处理。
+- `manual` 模式下必须提供 `models`，否则会在加载/创建阶段报错。
+- `manual` 模式会忽略 discovery 相关字段（如 `discovery_endpoint_path`、`discovery_response_profile`）。
+- 旧版嵌套字段（如 `openai_compatible/gemini/anthropic`）在严格校验下会被拒绝，升级前请先执行迁移脚本：
+
+```bash
+go run ./scripts/migrate_provider_yaml.go --base-dir ~/.neocode
+```
+
+仅预览不落盘：
+
+```bash
+go run ./scripts/migrate_provider_yaml.go --base-dir ~/.neocode --dry-run
 ```
 
 ## Auto Compact 失败与校验补充

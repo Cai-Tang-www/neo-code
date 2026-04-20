@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 func TestSQLiteStoreSaveAssetOpenAndStat(t *testing.T) {
@@ -144,6 +146,23 @@ func TestSQLiteStoreAssetMethodsRespectContext(t *testing.T) {
 	}
 	if _, err := store.Stat(ctx, "session_assets_ctx", "asset_x"); err == nil {
 		t.Fatalf("expected canceled Stat error")
+	}
+}
+
+func TestSQLiteStoreSaveAssetRespectsConfiguredAssetLimit(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	store.SetSessionAssetLimits(providertypes.SessionAssetLimits{
+		MaxSessionAssetBytes:       1,
+		MaxSessionAssetsTotalBytes: 1,
+	})
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_limit", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if _, err := store.SaveAsset(ctx, session.ID, strings.NewReader("xx"), "image/png"); err == nil ||
+		!strings.Contains(err.Error(), "asset size exceeds 1 bytes") {
+		t.Fatalf("expected configured asset size limit error, got %v", err)
 	}
 }
 

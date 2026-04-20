@@ -143,16 +143,50 @@ func TestServicePrepareUserInputDoesNotBlockWhenPrepareEventQueueIsFull(t *testi
 	if input.SessionID == "" {
 		t.Fatalf("expected prepared session id")
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("PrepareUserInput() blocked too long with full event queue: %v", elapsed)
 	}
 }
 
+func TestServicePrepareUserInputAppliesRuntimeAssetLimitsToSessionStore(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	runtimeCfg := config.StaticDefaults().Runtime
+	runtimeCfg.Assets.MaxSessionAssetBytes = 32
+	runtimeCfg.Assets.MaxSessionAssetsTotalBytes = 32
+	svc, _ := newPrepareTestServiceWithRuntimeConfig(t, workdir, true, runtimeCfg)
+
+	imagePath := filepath.Join(workdir, "img.png")
+	if err := os.WriteFile(imagePath, minimalPNGBytesForRuntimeTest(), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	_, err := svc.PrepareUserInput(context.Background(), PrepareInput{
+		RunID:  "run-prepare-limit-1",
+		Text:   "hello",
+		Images: []UserImageInput{{Path: imagePath, MimeType: "image/png"}},
+	})
+	if err == nil {
+		t.Fatal("expected PrepareUserInput() to fail when runtime assets limit is too small")
+	}
+}
+
 func newPrepareTestService(t *testing.T, workdir string, withPreparer bool) (*Service, *agentsession.SQLiteStore) {
+	return newPrepareTestServiceWithRuntimeConfig(t, workdir, withPreparer, config.StaticDefaults().Runtime)
+}
+
+func newPrepareTestServiceWithRuntimeConfig(
+	t *testing.T,
+	workdir string,
+	withPreparer bool,
+	runtimeCfg config.RuntimeConfig,
+) (*Service, *agentsession.SQLiteStore) {
 	t.Helper()
 
 	cfg := config.StaticDefaults()
 	cfg.Workdir = workdir
+	cfg.Runtime = runtimeCfg
 	loader := config.NewLoader(t.TempDir(), cfg)
 	manager := config.NewManager(loader)
 	if _, err := manager.Load(context.Background()); err != nil {

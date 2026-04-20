@@ -18,7 +18,6 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 		BaseURL:   "https://API.EXAMPLE.COM/v1/",
 		Model:     "server-default",
 		APIKeyEnv: "CATALOG_PROVIDER_API_KEY",
-		APIStyle:  " Responses ",
 		Models: []providertypes.ModelDescriptor{
 			{ID: " model-a ", Name: " Model A "},
 		},
@@ -36,7 +35,7 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 	if input.Identity.BaseURL != "https://api.example.com/v1" {
 		t.Fatalf("expected normalized base URL, got %+v", input.Identity)
 	}
-	if input.Identity.APIStyle != "responses" {
+	if input.Identity.APIStyle != providerpkg.OpenAICompatibleAPIStyleChatCompletions {
 		t.Fatalf("expected normalized api_style, got %+v", input.Identity)
 	}
 	if input.Identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
@@ -63,9 +62,6 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 	}
 	if runtimeConfig.DefaultModel != "server-default" || runtimeConfig.APIKey != "secret-key" {
 		t.Fatalf("expected runtime config to resolve model and api key, got %+v", runtimeConfig)
-	}
-	if runtimeConfig.APIStyle != providerpkg.OpenAICompatibleAPIStyleResponses {
-		t.Fatalf("expected runtime config api_style to be normalized, got %+v", runtimeConfig)
 	}
 }
 
@@ -106,13 +102,6 @@ func TestCatalogInputFromProviderDefaultsOpenAICompatibleIdentityAPIStyle(t *tes
 		)
 	}
 
-	runtimeConfig, err := input.ResolveDiscoveryConfig()
-	if err != nil {
-		t.Fatalf("ResolveDiscoveryConfig() error = %v", err)
-	}
-	if runtimeConfig.APIStyle != providerpkg.OpenAICompatibleAPIStyleChatCompletions {
-		t.Fatalf("expected runtime config to inherit default api_style, got %+v", runtimeConfig)
-	}
 }
 
 func TestCatalogInputFromProviderCustomOmitsDefaultModels(t *testing.T) {

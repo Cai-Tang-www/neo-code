@@ -151,7 +151,6 @@ func TestListProviderModelsAllowsUnsupportedOpenAICompatibleAPIStyleWhenCatalogI
 	store := newMemoryStore()
 	service := NewService("", registry, store)
 	cfg := customGatewayProvider()
-	cfg.APIStyle = "responses"
 
 	input := mustCatalogInput(t, cfg)
 	if err := store.Save(context.Background(), ModelCatalog{
@@ -184,7 +183,6 @@ func TestListBuiltinProviderModelsAllowsUnsupportedOpenAICompatibleAPIStyleWhenC
 	store := newMemoryStore()
 	service := NewService("", registry, store)
 	cfg := config.OpenAIProvider()
-	cfg.APIStyle = "responses"
 
 	input := mustCatalogInput(t, cfg)
 	if err := store.Save(context.Background(), ModelCatalog{
@@ -216,7 +214,6 @@ func TestListBuiltinProviderModelsSnapshotAllowsUnsupportedOpenAICompatibleAPISt
 
 	service := NewService("", registry, newMemoryStore())
 	cfg := config.OpenAIProvider()
-	cfg.APIStyle = "responses"
 
 	input := mustCatalogInput(t, cfg)
 	if err := service.store.Save(context.Background(), ModelCatalog{
@@ -249,7 +246,6 @@ func TestListBuiltinProviderModelsSnapshotAndCachedAllowUnsupportedAPIStyleWithC
 	store := newMemoryStore()
 	service := NewService("", registry, store)
 	cfg := config.OpenAIProvider()
-	cfg.APIStyle = "responses"
 
 	input := mustCatalogInput(t, cfg)
 	if err := store.Save(context.Background(), ModelCatalog{

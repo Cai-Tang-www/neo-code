@@ -62,18 +62,60 @@ func TestResolveSelectedProviderNotFound(t *testing.T) {
 	}
 }
 
+func TestResolveSelectedProviderIncludesRuntimeSessionAssetLimits(t *testing.T) {
+	const (
+		maxSingle = int64(128)
+		maxTotal  = int64(512)
+	)
+	envName := "TEST_PROVIDER_KEY"
+	t.Setenv(envName, "secret")
+
+	cfg := Config{
+		SelectedProvider: "custom",
+		Providers: []ProviderConfig{
+			{
+				Name:      "custom",
+				Driver:    "openaicompat",
+				BaseURL:   "https://llm.example.com/v1",
+				APIKeyEnv: envName,
+				Source:    ProviderSourceCustom,
+			},
+		},
+		Runtime: RuntimeConfig{
+			Assets: RuntimeAssetsConfig{
+				MaxSessionAssetBytes:       maxSingle,
+				MaxSessionAssetsTotalBytes: maxTotal,
+			},
+		},
+	}
+
+	resolved, err := ResolveSelectedProvider(cfg)
+	if err != nil {
+		t.Fatalf("ResolveSelectedProvider() error = %v", err)
+	}
+
+	if resolved.SessionAssetLimits.MaxSessionAssetBytes != maxSingle {
+		t.Fatalf("expected MaxSessionAssetBytes=%d, got %d", maxSingle, resolved.SessionAssetLimits.MaxSessionAssetBytes)
+	}
+	if resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes != maxTotal {
+		t.Fatalf(
+			"expected MaxSessionAssetsTotalBytes=%d, got %d",
+			maxTotal,
+			resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes,
+		)
+	}
+}
+
 func TestProviderConfigIdentity(t *testing.T) {
 	t.Parallel()
 
 	cfg := ProviderConfig{
-		Name:                     "test-openai",
-		Driver:                   "openaicompat",
-		BaseURL:                  "https://api.openai.com/v1",
-		Model:                    "gpt-4o",
-		APIKeyEnv:                "TEST_KEY",
-		APIStyle:                 "chat_completions",
-		DiscoveryEndpointPath:    "models",
-		DiscoveryResponseProfile: "openai",
+		Name:                  "test-openai",
+		Driver:                "openaicompat",
+		BaseURL:               "https://api.openai.com/v1",
+		Model:                 "gpt-4o",
+		APIKeyEnv:             "TEST_KEY",
+		DiscoveryEndpointPath: "models",
 	}
 
 	identity, err := cfg.Identity()
@@ -161,9 +203,6 @@ func TestQiniuProviderConfig(t *testing.T) {
 	if provider.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
 		t.Fatalf("expected discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, provider.DiscoveryEndpointPath)
 	}
-	if provider.DiscoveryResponseProfile != providerpkg.DiscoveryResponseProfileOpenAI {
-		t.Fatalf("expected discovery profile openai, got %q", provider.DiscoveryResponseProfile)
-	}
 }
 
 func TestNormalizeConfigKey(t *testing.T) {
@@ -221,9 +260,10 @@ func TestProviderConfigValidateRejectsInvalidDiscoverySettings(t *testing.T) {
 	}
 
 	cfg.DiscoveryEndpointPath = "/models"
-	cfg.DiscoveryResponseProfile = "not-supported"
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "discovery response profile") {
-		t.Fatalf("expected invalid discovery response profile error, got %v", err)
+	cfg.ChatEndpointPath = "https://api.openai.com/chat/completions"
+	cfg.Model = "gpt-4.1"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must be a relative path") {
+		t.Fatalf("expected invalid chat endpoint path error, got %v", err)
 	}
 }
 
@@ -291,12 +331,22 @@ func TestCustomProviderModelsRejectsEmptyID(t *testing.T) {
 	}
 }
 
+func TestCustomProviderModelsRejectsEmptyName(t *testing.T) {
+	t.Parallel()
+
+	_, err := customProviderModels([]customProviderModelFile{{ID: "deepseek-coder"}})
+	if err == nil || !strings.Contains(err.Error(), "models[0].name") {
+		t.Fatalf("expected empty name validation error, got %v", err)
+	}
+}
+
 func TestCustomProviderModelsRejectsNonPositiveContextWindow(t *testing.T) {
 	t.Parallel()
 
 	contextWindow := 0
 	_, err := customProviderModels([]customProviderModelFile{{
 		ID:            "deepseek-coder",
+		Name:          "DeepSeek Coder",
 		ContextWindow: &contextWindow,
 	}})
 	if err == nil || !strings.Contains(err.Error(), "context_window") {
@@ -310,6 +360,7 @@ func TestCustomProviderModelsRejectsNonPositiveMaxOutputTokens(t *testing.T) {
 	maxOutputTokens := 0
 	_, err := customProviderModels([]customProviderModelFile{{
 		ID:              "deepseek-coder",
+		Name:            "DeepSeek Coder",
 		MaxOutputTokens: &maxOutputTokens,
 	}})
 	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
@@ -321,8 +372,8 @@ func TestCustomProviderModelsRejectsDuplicateID(t *testing.T) {
 	t.Parallel()
 
 	_, err := customProviderModels([]customProviderModelFile{
-		{ID: "deepseek-coder"},
-		{ID: " DeepSeek-Coder "},
+		{ID: "deepseek-coder", Name: "DeepSeek Coder"},
+		{ID: " DeepSeek-Coder ", Name: "DeepSeek Coder Duplicate"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "duplicated") {
 		t.Fatalf("expected duplicate id validation error, got %v", err)
@@ -501,34 +552,34 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 
 	resolved := ResolvedProviderConfig{
 		ProviderConfig: ProviderConfig{
-			Name:           "company-gateway",
-			Driver:         "openaicompat",
-			BaseURL:        "https://llm.example.com/v1",
-			Model:          "server-default",
-			APIStyle:       "responses",
-			DeploymentMode: "ignored",
-			APIVersion:     "ignored",
+			Name:    "company-gateway",
+			Driver:  "openaicompat",
+			BaseURL: "https://llm.example.com/v1",
+			Model:   "server-default",
 		},
 		APIKey: "secret-key",
+		SessionAssetLimits: providertypes.SessionAssetLimits{
+			MaxSessionAssetBytes:       1024,
+			MaxSessionAssetsTotalBytes: 2048,
+		},
 	}
 
-	got := resolved.ToRuntimeConfig()
+	got, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
 	want := providerpkg.RuntimeConfig{
-		Name:                     "company-gateway",
-		Driver:                   "openaicompat",
-		BaseURL:                  "https://llm.example.com/v1",
-		DefaultModel:             "server-default",
-		APIKey:                   "secret-key",
-		ChatProtocol:             providerpkg.ChatProtocolOpenAIResponses,
-		ChatEndpointPath:         "/responses",
-		DiscoveryProtocol:        providerpkg.DiscoveryProtocolOpenAIModels,
-		AuthStrategy:             providerpkg.AuthStrategyBearer,
-		ResponseProfile:          providerpkg.DiscoveryResponseProfileOpenAI,
-		APIStyle:                 "responses",
-		DeploymentMode:           "ignored",
-		APIVersion:               "ignored",
-		DiscoveryEndpointPath:    providerpkg.DiscoveryEndpointPathModels,
-		DiscoveryResponseProfile: providerpkg.DiscoveryResponseProfileOpenAI,
+		Name:         "company-gateway",
+		Driver:       "openaicompat",
+		BaseURL:      "https://llm.example.com/v1",
+		DefaultModel: "server-default",
+		APIKey:       "secret-key",
+		SessionAssetLimits: providertypes.SessionAssetLimits{
+			MaxSessionAssetBytes:       1024,
+			MaxSessionAssetsTotalBytes: 2048,
+		},
+		ChatEndpointPath:      "",
+		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
 	}
 
 	if got != want {
@@ -549,11 +600,37 @@ func TestResolvedProviderConfigToRuntimeConfigStripsBaseURLUserinfo(t *testing.T
 		APIKey: "secret-key",
 	}
 
-	got := resolved.ToRuntimeConfig()
+	got, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
 	if strings.Contains(got.BaseURL, "token@") {
 		t.Fatalf("expected runtime base URL to strip userinfo, got %q", got.BaseURL)
 	}
 	if got.BaseURL != "https://llm.example.com/v1" {
 		t.Fatalf("expected sanitized runtime base URL, got %q", got.BaseURL)
+	}
+}
+
+func TestResolvedProviderConfigToRuntimeConfigReturnsProtocolNormalizationError(t *testing.T) {
+	t.Parallel()
+
+	resolved := ResolvedProviderConfig{
+		ProviderConfig: ProviderConfig{
+			Name:             "company-gateway",
+			Driver:           "openaicompat",
+			BaseURL:          "https://llm.example.com/v1",
+			APIKeyEnv:        "TEST_KEY",
+			ChatEndpointPath: "https://llm.example.com/chat/completions",
+		},
+		APIKey: "secret-key",
+	}
+
+	_, err := resolved.ToRuntimeConfig()
+	if err == nil {
+		t.Fatal("expected ToRuntimeConfig() to return normalization error for invalid chat endpoint path")
+	}
+	if !strings.Contains(err.Error(), "must be a relative path") {
+		t.Fatalf("expected relative path error, got %v", err)
 	}
 }

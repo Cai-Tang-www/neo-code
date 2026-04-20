@@ -16,11 +16,11 @@ import (
 )
 
 func TestCreateCustomProviderSuccess(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
-	defer restoreSave()
+	defer restoreSaveWithModels()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -35,7 +35,6 @@ func TestCreateCustomProviderSuccess(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
 		APIKey:    "test-key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 
 	restore := captureEnvForCreateProvider(t, input.APIKeyEnv)
@@ -67,12 +66,156 @@ func TestCreateCustomProviderSuccess(t *testing.T) {
 	}
 }
 
-func TestCreateCustomProviderRollbackOnSelectFailure(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+func TestCreateCustomProviderManualSourceRequiresModelJSON(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
-	defer restoreSave()
+	defer restoreSaveWithModels()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{{ID: "manual-model", Name: "manual-model"}},
+	})
+
+	_, err := service.CreateCustomProvider(context.Background(), CreateCustomProviderInput{
+		Name:        "manual-source-no-models",
+		Driver:      provider.DriverOpenAICompat,
+		BaseURL:     "https://llm.example.com/v1",
+		APIKeyEnv:   "MANUAL_SOURCE_NO_MODELS_API_KEY",
+		APIKey:      "test-key",
+		ModelSource: provider.ModelSourceManual,
+	})
+	if err == nil || !strings.Contains(err.Error(), "manual model json is empty") {
+		t.Fatalf("expected missing manual model json error, got %v", err)
+	}
+}
+
+func TestCreateCustomProviderManualSourcePersistsModels(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{{ID: "manual-model-1", Name: "Manual Model 1"}},
+	})
+
+	input := CreateCustomProviderInput{
+		Name:                  "manual-source-provider",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "MANUAL_SOURCE_PROVIDER_API_KEY",
+		APIKey:                "test-key",
+		ModelSource:           provider.ModelSourceManual,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		ManualModelsJSON: `[
+			{
+				"id": "manual-model-1",
+				"name": "Manual Model 1"
+			},
+			{
+				"id": "manual-model-2",
+				"name": "Manual Model 2",
+				"context_window": 131072
+			}
+		]`,
+	}
+	if _, err := service.CreateCustomProvider(context.Background(), input); err != nil {
+		t.Fatalf("CreateCustomProvider() error = %v", err)
+	}
+
+	providerPath := filepath.Join(manager.BaseDir(), "providers", input.Name, "provider.yaml")
+	data, readErr := os.ReadFile(providerPath)
+	if readErr != nil {
+		t.Fatalf("read provider config: %v", readErr)
+	}
+	text := string(data)
+	if !strings.Contains(text, "model_source: manual") {
+		t.Fatalf("expected provider config to persist manual model source, got %q", text)
+	}
+	if strings.Contains(text, "discovery_endpoint_path:") {
+		t.Fatalf("expected provider config to omit discovery endpoint in manual mode, got %q", text)
+	}
+	if !strings.Contains(text, "id: manual-model-1") || !strings.Contains(text, "id: manual-model-2") {
+		t.Fatalf("expected provider config to persist manual model entries, got %q", text)
+	}
+
+	cfg := manager.Get()
+	providerCfg, err := cfg.ProviderByName(input.Name)
+	if err != nil {
+		t.Fatalf("expected provider %q in config, got %v", input.Name, err)
+	}
+	if provider.NormalizeModelSource(providerCfg.ModelSource) != provider.ModelSourceManual {
+		t.Fatalf("expected provider model source manual, got %q", providerCfg.ModelSource)
+	}
+	if len(providerCfg.Models) != 2 {
+		t.Fatalf("expected 2 manual models after reload, got %d", len(providerCfg.Models))
+	}
+}
+
+func TestNormalizeCreateCustomProviderInputDefaultsToDiscoverWhenModelSourceEmpty(t *testing.T) {
+	normalized, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
+		Name:      "default-discover-provider",
+		Driver:    provider.DriverOpenAICompat,
+		BaseURL:   "https://llm.example.com/v1",
+		APIKeyEnv: "DEFAULT_DISCOVER_PROVIDER_API_KEY",
+		APIKey:    "test-key",
+	})
+	if err != nil {
+		t.Fatalf("normalizeCreateCustomProviderInput() error = %v", err)
+	}
+	if normalized.ModelSource != provider.ModelSourceDiscover {
+		t.Fatalf("expected default model source discover, got %q", normalized.ModelSource)
+	}
+	if normalized.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
+		t.Fatalf("expected default discovery endpoint /models, got %q", normalized.DiscoveryEndpointPath)
+	}
+}
+
+func TestNormalizeCreateCustomProviderInputRejectsInvalidModelSource(t *testing.T) {
+	_, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
+		Name:        "invalid-model-source-provider",
+		Driver:      provider.DriverOpenAICompat,
+		BaseURL:     "https://llm.example.com/v1",
+		APIKeyEnv:   "INVALID_MODEL_SOURCE_PROVIDER_API_KEY",
+		APIKey:      "test-key",
+		ModelSource: "manul",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported model source") {
+		t.Fatalf("expected invalid model source error, got %v", err)
+	}
+}
+
+func TestNormalizeCreateCustomProviderInputManualSkipsDiscoveryFieldValidation(t *testing.T) {
+	normalized, err := normalizeCreateCustomProviderInput(CreateCustomProviderInput{
+		Name:             "manual-no-discovery-validation",
+		Driver:           provider.DriverOpenAICompat,
+		BaseURL:          "https://llm.example.com/v1",
+		APIKeyEnv:        "MANUAL_NO_DISCOVERY_VALIDATION_API_KEY",
+		APIKey:           "test-key",
+		ModelSource:      provider.ModelSourceManual,
+		ManualModelsJSON: `[{"id":"manual-model","name":"Manual Model"}]`,
+	})
+	if err != nil {
+		t.Fatalf("normalizeCreateCustomProviderInput() error = %v", err)
+	}
+	if normalized.DiscoveryEndpointPath != "" {
+		t.Fatalf("expected manual mode to clear discovery endpoint path, got %q", normalized.DiscoveryEndpointPath)
+	}
+	if len(normalized.ManualModels) != 1 {
+		t.Fatalf("expected one manual model, got %d", len(normalized.ManualModels))
+	}
+}
+
+func TestCreateCustomProviderRollbackOnSelectFailure(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), errorCatalogStub{err: context.DeadlineExceeded})
@@ -83,7 +226,6 @@ func TestCreateCustomProviderRollbackOnSelectFailure(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "ROLLBACK_GATEWAY_API_KEY",
 		APIKey:    "new-key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 
 	restore := captureEnvForCreateProvider(t, input.APIKeyEnv)
@@ -110,11 +252,11 @@ func TestCreateCustomProviderRollbackOnSelectFailure(t *testing.T) {
 }
 
 func TestCreateCustomProviderRejectsEnvConflicts(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
-	defer restoreSave()
+	defer restoreSaveWithModels()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -127,19 +269,55 @@ func TestCreateCustomProviderRejectsEnvConflicts(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: configpkg.OpenAIDefaultAPIKeyEnv,
 		APIKey:    "key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	})
 	if err == nil || !strings.Contains(err.Error(), "duplicates provider") {
 		t.Fatalf("expected duplicate env error, got %v", err)
 	}
 }
 
-func TestCreateCustomProviderRejectsProtectedEnvName(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+func TestCreateCustomProviderRejectsDuplicateCustomProviderName(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
-	defer restoreSave()
+	defer restoreSaveWithModels()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{{ID: "m1", Name: "m1"}},
+	})
+
+	firstInput := CreateCustomProviderInput{
+		Name:      "duplicate-custom-provider",
+		Driver:    provider.DriverOpenAICompat,
+		BaseURL:   "https://llm.example.com/v1",
+		APIKeyEnv: "DUPLICATE_CUSTOM_PROVIDER_A_API_KEY",
+		APIKey:    "key-a",
+	}
+	restoreA := captureEnvForCreateProvider(t, firstInput.APIKeyEnv)
+	defer restoreA()
+	if _, err := service.CreateCustomProvider(context.Background(), firstInput); err != nil {
+		t.Fatalf("first CreateCustomProvider() error = %v", err)
+	}
+
+	secondInput := firstInput
+	secondInput.APIKeyEnv = "DUPLICATE_CUSTOM_PROVIDER_B_API_KEY"
+	secondInput.APIKey = "key-b"
+	restoreB := captureEnvForCreateProvider(t, secondInput.APIKeyEnv)
+	defer restoreB()
+
+	_, err := service.CreateCustomProvider(context.Background(), secondInput)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected duplicate provider name error, got %v", err)
+	}
+}
+
+func TestCreateCustomProviderRejectsProtectedEnvName(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -152,7 +330,6 @@ func TestCreateCustomProviderRejectsProtectedEnvName(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "PATH",
 		APIKey:    "key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	})
 	if err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("expected protected env error, got %v", err)
@@ -160,11 +337,11 @@ func TestCreateCustomProviderRejectsProtectedEnvName(t *testing.T) {
 }
 
 func TestCreateCustomProviderRejectsInvalidProviderName(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
-	defer restoreSave()
+	defer restoreSaveWithModels()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -177,7 +354,6 @@ func TestCreateCustomProviderRejectsInvalidProviderName(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "INVALID_PROVIDER_NAME_API_KEY",
 		APIKey:    "key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	})
 	if err == nil || !strings.Contains(err.Error(), "provider name") {
 		t.Fatalf("expected invalid provider name error, got %v", err)
@@ -185,11 +361,11 @@ func TestCreateCustomProviderRejectsInvalidProviderName(t *testing.T) {
 }
 
 func TestCreateCustomProviderSerializesAcrossServicesSharingManager(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
-	defer restoreSave()
+	defer restoreSaveWithModels()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	failingService := NewService(manager, newDriverSupporterStub(), errorCatalogStub{err: context.DeadlineExceeded})
@@ -216,7 +392,6 @@ func TestCreateCustomProviderSerializesAcrossServicesSharingManager(t *testing.T
 		BaseURL:   "https://shared.example.com/v1",
 		APIKeyEnv: "SHARED_GATEWAY_API_KEY",
 		APIKey:    "key-a",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 	inputB := inputA
 	inputB.APIKey = "key-b"
@@ -279,11 +454,11 @@ func TestCreateCustomProviderSerializesAcrossServicesSharingManager(t *testing.T
 }
 
 func TestCreateCustomProviderRollbackOnSaveProviderFailure(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
-	defer restoreSave()
+	defer restoreSaveWithModels()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -295,22 +470,10 @@ func TestCreateCustomProviderRollbackOnSaveProviderFailure(t *testing.T) {
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "SAVE_FAILED_PROVIDER_API_KEY",
 		APIKey:    "key",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 
-	saveCustomProviderForCreate = func(
-		baseDir string,
-		name string,
-		driver string,
-		baseURL string,
-		apiKeyEnv string,
-		apiStyle string,
-		deploymentMode string,
-		apiVersion string,
-		discoveryEndpointPath string,
-		discoveryResponseProfile string,
-	) error {
-		providerDir := filepath.Join(baseDir, "providers", name)
+	saveCustomProviderWithModelsForCreate = func(baseDir string, input configpkg.SaveCustomProviderInput) error {
+		providerDir := filepath.Join(baseDir, "providers", input.Name)
 		if err := os.MkdirAll(providerDir, 0o755); err != nil {
 			return err
 		}
@@ -335,11 +498,11 @@ func TestCreateCustomProviderRollbackOnSaveProviderFailure(t *testing.T) {
 }
 
 func TestCreateCustomProviderSerializesAcrossManagersSharingBaseDir(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
-	defer restoreSave()
+	defer restoreSaveWithModels()
 
 	baseDir := t.TempDir()
 	loaderA := configpkg.NewLoader(baseDir, testDefaultConfig())
@@ -375,7 +538,6 @@ func TestCreateCustomProviderSerializesAcrossManagersSharingBaseDir(t *testing.T
 		BaseURL:   "https://shared.example.com/v1",
 		APIKeyEnv: "SHARED_BY_MANAGERS_API_KEY",
 		APIKey:    "key-a",
-		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
 	}
 	inputB := inputA
 	inputB.APIKey = "key-b"
@@ -466,11 +628,11 @@ func TestLockProviderCreateCrossProcessWaitsForFreshLockUntilContextDone(t *test
 }
 
 func TestCreateCustomProviderRejectsInvalidDiscoverySettings(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
-	defer restoreSave()
+	defer restoreSaveWithModels()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -483,7 +645,6 @@ func TestCreateCustomProviderRejectsInvalidDiscoverySettings(t *testing.T) {
 		BaseURL:               "https://llm.example.com/v1",
 		APIKeyEnv:             "INVALID_DISCOVERY_PROVIDER_API_KEY",
 		APIKey:                "key",
-		APIStyle:              provider.OpenAICompatibleAPIStyleChatCompletions,
 		DiscoveryEndpointPath: "https://llm.example.com/models",
 	})
 	if err == nil || !strings.Contains(err.Error(), "discovery endpoint path") {
@@ -491,17 +652,15 @@ func TestCreateCustomProviderRejectsInvalidDiscoverySettings(t *testing.T) {
 	}
 
 	_, err = service.CreateCustomProvider(context.Background(), CreateCustomProviderInput{
-		Name:                     "invalid-discovery-profile-provider",
-		Driver:                   provider.DriverOpenAICompat,
-		BaseURL:                  "https://llm.example.com/v1",
-		APIKeyEnv:                "INVALID_DISCOVERY_PROFILE_PROVIDER_API_KEY",
-		APIKey:                   "key",
-		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
-		DiscoveryEndpointPath:    "/models",
-		DiscoveryResponseProfile: "unsupported",
+		Name:             "invalid-chat-endpoint-provider",
+		Driver:           provider.DriverOpenAICompat,
+		BaseURL:          "https://llm.example.com/v1",
+		APIKeyEnv:        "INVALID_CHAT_ENDPOINT_PROVIDER_API_KEY",
+		APIKey:           "key",
+		ChatEndpointPath: "https://llm.example.com/chat/completions",
 	})
-	if err == nil || !strings.Contains(err.Error(), "discovery response profile") {
-		t.Fatalf("expected invalid discovery response profile error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "must be a relative path") {
+		t.Fatalf("expected invalid chat endpoint path error, got %v", err)
 	}
 }
 
@@ -576,15 +735,15 @@ func stubUserEnvOpsForCreateProvider(t *testing.T) (func(), func(), func(), func
 	prevPersist := persistUserEnvVarForCreate
 	prevDelete := deleteUserEnvVarForCreate
 	prevLookup := lookupUserEnvVarForCreate
-	prevSave := saveCustomProviderForCreate
+	prevSaveWithModels := saveCustomProviderWithModelsForCreate
 
 	persistUserEnvVarForCreate = func(key string, value string) error { return nil }
 	deleteUserEnvVarForCreate = func(key string) error { return nil }
 	lookupUserEnvVarForCreate = func(key string) (string, bool, error) { return "", false, nil }
-	saveCustomProviderForCreate = configpkg.SaveCustomProvider
+	saveCustomProviderWithModelsForCreate = configpkg.SaveCustomProviderWithModels
 
 	return func() { persistUserEnvVarForCreate = prevPersist },
 		func() { deleteUserEnvVarForCreate = prevDelete },
 		func() { lookupUserEnvVarForCreate = prevLookup },
-		func() { saveCustomProviderForCreate = prevSave }
+		func() { saveCustomProviderWithModelsForCreate = prevSaveWithModels }
 }

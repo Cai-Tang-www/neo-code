@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 )
 
@@ -43,8 +44,14 @@ func (s *Service) PrepareUserInput(ctx context.Context, input PrepareInput) (Use
 	}
 
 	defaultWorkdir := ""
+	sessionAssetLimits := providertypes.DefaultSessionAssetLimits()
 	if s.configManager != nil {
-		defaultWorkdir = strings.TrimSpace(s.configManager.Get().Workdir)
+		cfg := s.configManager.Get()
+		defaultWorkdir = strings.TrimSpace(cfg.Workdir)
+		sessionAssetLimits = cfg.Runtime.ResolveSessionAssetLimits()
+	}
+	if limitAwareStore, ok := s.sessionAssetStore.(sessionAssetLimitStore); ok {
+		limitAwareStore.SetSessionAssetLimits(sessionAssetLimits)
 	}
 
 	prepared, err := s.userInputPreparer.Prepare(ctx, input, defaultWorkdir)
@@ -118,6 +125,10 @@ func (s *Service) emitPrepareEvent(ctx context.Context, kind EventType, runID st
 
 type sessionInputPreparer struct {
 	preparer *agentsession.InputPreparer
+}
+
+type sessionAssetLimitStore interface {
+	SetSessionAssetLimits(limits providertypes.SessionAssetLimits)
 }
 
 // Prepare 将 runtime 输入 DTO 映射到 session 子层并返回标准 UserInput 结果。

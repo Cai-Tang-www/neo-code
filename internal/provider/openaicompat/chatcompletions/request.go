@@ -34,6 +34,7 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 		Stream:   true,
 		Messages: make([]Message, 0, len(req.Messages)+1),
 	}
+	assetLimits := providertypes.NormalizeSessionAssetLimits(cfg.SessionAssetLimits)
 
 	if strings.TrimSpace(req.SystemPrompt) != "" {
 		payload.Messages = append(payload.Messages, Message{
@@ -44,12 +45,13 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 
 	var usedSessionAssetBytes int64
 	for _, message := range req.Messages {
-		remainingSessionAssetBytes := maxSessionAssetsTotalBytes - usedSessionAssetBytes
+		remainingSessionAssetBytes := assetLimits.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
 		msg, consumedBytes, err := toOpenAIMessageWithBudget(
 			ctx,
 			message,
 			req.SessionAssetReader,
 			remainingSessionAssetBytes,
+			assetLimits,
 		)
 		if err != nil {
 			return Request{}, err
@@ -113,7 +115,13 @@ func cloneSchemaTopLevel(schema map[string]any) map[string]any {
 
 // ToOpenAIMessage 将通用 Message 转换为 OpenAI 协议消息格式。
 func ToOpenAIMessage(ctx context.Context, message providertypes.Message, assetReader providertypes.SessionAssetReader) (Message, error) {
-	msg, _, err := toOpenAIMessageWithBudget(ctx, message, assetReader, maxSessionAssetsTotalBytes)
+	msg, _, err := toOpenAIMessageWithBudget(
+		ctx,
+		message,
+		assetReader,
+		maxSessionAssetsTotalBytes,
+		providertypes.DefaultSessionAssetLimits(),
+	)
 	return msg, err
 }
 
@@ -123,7 +131,9 @@ func toOpenAIMessageWithBudget(
 	message providertypes.Message,
 	assetReader providertypes.SessionAssetReader,
 	remainingAssetBudget int64,
+	assetLimits providertypes.SessionAssetLimits,
 ) (Message, int64, error) {
+	normalizedAssetLimits := providertypes.NormalizeSessionAssetLimits(assetLimits)
 	if remainingAssetBudget < 0 {
 		remainingAssetBudget = 0
 	}
@@ -185,6 +195,7 @@ func toOpenAIMessageWithBudget(
 						assetReader,
 						part.Image.Asset,
 						remainingAssetBudget-usedAssetBytes,
+						normalizedAssetLimits,
 					)
 					if err != nil {
 						return Message{}, 0, err
@@ -229,7 +240,9 @@ func resolveSessionAssetDataURL(
 	assetReader providertypes.SessionAssetReader,
 	asset *providertypes.AssetRef,
 	remainingBudget int64,
+	assetLimits providertypes.SessionAssetLimits,
 ) (string, int64, error) {
+	normalizedAssetLimits := providertypes.NormalizeSessionAssetLimits(assetLimits)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -239,7 +252,7 @@ func resolveSessionAssetDataURL(
 	if remainingBudget <= 0 {
 		return "", 0, fmt.Errorf(
 			"session_asset total exceeds %d bytes",
-			maxSessionAssetsTotalBytes,
+			normalizedAssetLimits.MaxSessionAssetsTotalBytes,
 		)
 	}
 	reader, mimeType, err := assetReader.Open(ctx, asset.ID)
@@ -248,7 +261,7 @@ func resolveSessionAssetDataURL(
 	}
 	defer func() { _ = reader.Close() }()
 
-	readLimit := maxSessionAssetReadBytes
+	readLimit := normalizedAssetLimits.MaxSessionAssetBytes
 	if remainingBudget < readLimit {
 		readLimit = remainingBudget
 	}
@@ -261,13 +274,13 @@ func resolveSessionAssetDataURL(
 		return "", 0, err
 	}
 	if int64(len(data)) > readLimit {
-		if readLimit < maxSessionAssetReadBytes {
+		if readLimit < normalizedAssetLimits.MaxSessionAssetBytes {
 			return "", 0, fmt.Errorf(
 				"session_asset total exceeds %d bytes",
-				maxSessionAssetsTotalBytes,
+				normalizedAssetLimits.MaxSessionAssetsTotalBytes,
 			)
 		}
-		return "", 0, fmt.Errorf("session_asset %q exceeds %d bytes", asset.ID, maxSessionAssetReadBytes)
+		return "", 0, fmt.Errorf("session_asset %q exceeds %d bytes", asset.ID, normalizedAssetLimits.MaxSessionAssetBytes)
 	}
 	if len(data) == 0 {
 		return "", 0, fmt.Errorf("session_asset %q is empty", asset.ID)

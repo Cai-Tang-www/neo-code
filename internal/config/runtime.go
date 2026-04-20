@@ -58,7 +58,7 @@ func (c RuntimeConfig) Clone() RuntimeConfig {
 	}
 }
 
-// ApplyDefaults 在配置缺失或非法时回填默认阈值。
+// ApplyDefaults 在配置缺失、为零或非法时回填默认阈值。
 func (c *RuntimeConfig) ApplyDefaults(defaults RuntimeConfig) {
 	if c == nil {
 		return

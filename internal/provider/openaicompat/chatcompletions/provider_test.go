@@ -172,6 +172,30 @@ func TestNewAndBuildRequest(t *testing.T) {
 			t.Fatalf("expected session_asset total budget error, got %v", err)
 		}
 
+		limitedCfg := testCfg("https://api.example.com/v1", "gpt-4.1", "test-key")
+		limitedCfg.SessionAssetLimits = providertypes.SessionAssetLimits{
+			MaxSessionAssetBytes:       1,
+			MaxSessionAssetsTotalBytes: 1,
+		}
+		if _, err := BuildRequest(context.Background(), limitedCfg, providertypes.GenerateRequest{
+			Messages: []providertypes.Message{
+				{
+					Role: providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{
+						providertypes.NewSessionAssetImagePart("asset-limited", "image/png"),
+					},
+				},
+			},
+			SessionAssetReader: stubSessionAssetReader{
+				assets: map[string]stubSessionAsset{
+					"asset-limited": {data: []byte("img"), mime: "image/png"},
+				},
+			},
+		}); err == nil || (!strings.Contains(err.Error(), "session_asset total exceeds") &&
+			!strings.Contains(err.Error(), `session_asset "asset-limited" exceeds 1 bytes`)) {
+			t.Fatalf("expected config driven session_asset limit error, got %v", err)
+		}
+
 		fallback, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
 			SystemPrompt: "   ",
 			Messages:     []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
@@ -389,12 +413,13 @@ func TestNewAndBuildRequest(t *testing.T) {
 
 func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 	t.Parallel()
+	limits := providertypes.DefaultSessionAssetLimits()
 
 	if _, _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
 		assets: map[string]stubSessionAsset{
 			"asset-no-budget": {data: []byte("x"), mime: "image/png"},
 		},
-	}, &providertypes.AssetRef{ID: "asset-no-budget", MimeType: "image/png"}, 0); err == nil ||
+	}, &providertypes.AssetRef{ID: "asset-no-budget", MimeType: "image/png"}, 0, limits); err == nil ||
 		!strings.Contains(err.Error(), "session_asset total exceeds") {
 		t.Fatalf("expected no budget error, got %v", err)
 	}
@@ -403,7 +428,7 @@ func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 		assets: map[string]stubSessionAsset{
 			"asset-nil-ctx": {data: []byte("x"), mime: "image/png"},
 		},
-	}, &providertypes.AssetRef{ID: "asset-nil-ctx", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err != nil {
+	}, &providertypes.AssetRef{ID: "asset-nil-ctx", MimeType: "image/png"}, maxSessionAssetsTotalBytes, limits); err != nil {
 		t.Fatalf("expected nil context to fallback to background, got %v", err)
 	}
 
@@ -413,7 +438,7 @@ func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 			_ = assetID
 			return nil, "", errors.New("open failed")
 		},
-	}, &providertypes.AssetRef{ID: "asset-open-error", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err == nil || !strings.Contains(err.Error(), "open session_asset") {
+	}, &providertypes.AssetRef{ID: "asset-open-error", MimeType: "image/png"}, maxSessionAssetsTotalBytes, limits); err == nil || !strings.Contains(err.Error(), "open session_asset") {
 		t.Fatalf("expected wrapped open error, got %v", err)
 	}
 
@@ -423,7 +448,7 @@ func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 			_ = assetID
 			return &failingReadCloser{err: errors.New("read failed")}, "image/png", nil
 		},
-	}, &providertypes.AssetRef{ID: "asset-read-error", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err == nil || !strings.Contains(err.Error(), "read session_asset") {
+	}, &providertypes.AssetRef{ID: "asset-read-error", MimeType: "image/png"}, maxSessionAssetsTotalBytes, limits); err == nil || !strings.Contains(err.Error(), "read session_asset") {
 		t.Fatalf("expected wrapped read error, got %v", err)
 	}
 
@@ -434,7 +459,7 @@ func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 			_ = assetID
 			return &cancelOnReadCloser{cancel: cancel}, "image/png", nil
 		},
-	}, &providertypes.AssetRef{ID: "asset-cancel-after-read", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err == nil || !strings.Contains(err.Error(), "context canceled") {
+	}, &providertypes.AssetRef{ID: "asset-cancel-after-read", MimeType: "image/png"}, maxSessionAssetsTotalBytes, limits); err == nil || !strings.Contains(err.Error(), "context canceled") {
 		t.Fatalf("expected canceled context after read, got %v", err)
 	}
 
@@ -442,7 +467,7 @@ func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 		assets: map[string]stubSessionAsset{
 			"asset-empty": {data: []byte{}, mime: "image/png"},
 		},
-	}, &providertypes.AssetRef{ID: "asset-empty", MimeType: "image/png"}, maxSessionAssetsTotalBytes); err == nil || !strings.Contains(err.Error(), "is empty") {
+	}, &providertypes.AssetRef{ID: "asset-empty", MimeType: "image/png"}, maxSessionAssetsTotalBytes, limits); err == nil || !strings.Contains(err.Error(), "is empty") {
 		t.Fatalf("expected empty asset error, got %v", err)
 	}
 
@@ -450,7 +475,7 @@ func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 		assets: map[string]stubSessionAsset{
 			"asset-over-total": {data: []byte("12345"), mime: "image/png"},
 		},
-	}, &providertypes.AssetRef{ID: "asset-over-total", MimeType: "image/png"}, 4); err == nil ||
+	}, &providertypes.AssetRef{ID: "asset-over-total", MimeType: "image/png"}, 4, limits); err == nil ||
 		!strings.Contains(err.Error(), "session_asset total exceeds") {
 		t.Fatalf("expected total budget error, got %v", err)
 	}
@@ -464,7 +489,7 @@ func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 		assets: map[string]stubSessionAsset{
 			"asset-negative-budget": {data: []byte("x"), mime: "image/png"},
 		},
-	}, -1); err == nil || !strings.Contains(err.Error(), "session_asset total exceeds") {
+	}, -1, limits); err == nil || !strings.Contains(err.Error(), "session_asset total exceeds") {
 		t.Fatalf("expected negative budget to fail as no budget, got %v", err)
 	}
 }
@@ -666,11 +691,12 @@ func TestEmitFlushMergeAndUsage(t *testing.T) {
 
 func testCfg(baseURL, model, apiKey string) provider.RuntimeConfig {
 	return provider.RuntimeConfig{
-		Name:         "openaicompat",
-		Driver:       "openaicompat",
-		BaseURL:      baseURL,
-		DefaultModel: model,
-		APIKey:       apiKey,
+		Name:             "openaicompat",
+		Driver:           "openaicompat",
+		BaseURL:          baseURL,
+		DefaultModel:     model,
+		APIKey:           apiKey,
+		ChatEndpointPath: "/chat/completions",
 	}
 }
 
@@ -780,6 +806,27 @@ func TestConsumeStreamVariants(t *testing.T) {
 		}
 	})
 
+	t.Run("eof without done but with finish reason finishes", func(t *testing.T) {
+		t.Parallel()
+
+		events := make(chan providertypes.StreamEvent, 4)
+		err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n"+
+				"data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n",
+		), events)
+		if err != nil {
+			t.Fatalf("expected stream to finish without [DONE] when finish_reason exists, got %v", err)
+		}
+		drained := drain(events)
+		if len(drained) != 2 || drained[0].Type != providertypes.StreamEventTextDelta || drained[1].Type != providertypes.StreamEventMessageDone {
+			t.Fatalf("unexpected events: %+v", drained)
+		}
+		done := mustDone(t, drained[1])
+		if done.FinishReason != "stop" || done.Usage == nil || done.Usage.TotalTokens != 2 {
+			t.Fatalf("unexpected done payload: %+v", done)
+		}
+	})
+
 	t.Run("cancellation beats interruption", func(t *testing.T) {
 		t.Parallel()
 
@@ -880,8 +927,8 @@ func TestGenerateVariants(t *testing.T) {
 		t.Parallel()
 
 		invalidURL := &Provider{cfg: testCfg("://bad", "gpt-4.1", "test-key"), client: &http.Client{}}
-		if err := invalidURL.Generate(context.Background(), userTextGenerateRequest("hello"), nil); err == nil || !strings.Contains(err.Error(), "build request") {
-			t.Fatalf("expected build request error, got %v", err)
+		if err := invalidURL.Generate(context.Background(), userTextGenerateRequest("hello"), nil); err == nil || !strings.Contains(err.Error(), "invalid chat endpoint configuration") {
+			t.Fatalf("expected invalid endpoint configuration error, got %v", err)
 		}
 
 		sendErr := &Provider{

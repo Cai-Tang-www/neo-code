@@ -12,7 +12,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-func TestDriverClosuresAndAPIStyle(t *testing.T) {
+func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,20 +52,12 @@ func TestDriverClosuresAndAPIStyle(t *testing.T) {
 		t.Fatalf("unexpected models: %+v", models)
 	}
 
-	if got := normalizedAPIStyle(""); got != provider.OpenAICompatibleAPIStyleChatCompletions {
-		t.Fatalf("expected default api style, got %q", got)
-	}
-	if got := normalizedAPIStyle(" Responses "); got != "responses" {
-		t.Fatalf("expected normalized responses style, got %q", got)
-	}
-	if got, err := supportedChatProtocol(provider.RuntimeConfig{}); err != nil || got != provider.ChatProtocolOpenAIChatCompletions {
+	if got, err := supportedChatProtocol(provider.RuntimeConfig{Driver: DriverName}); err != nil || got != provider.ChatProtocolOpenAIChatCompletions {
 		t.Fatalf("expected default chat protocol, got protocol=%q err=%v", got, err)
 	}
-	if _, err := supportedChatProtocol(provider.RuntimeConfig{APIStyle: " Responses "}); err == nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
-		t.Fatalf("expected unsupported responses api_style, got %v", err)
-	}
-	if _, err := supportedChatProtocol(provider.RuntimeConfig{APIStyle: "custom_style"}); err == nil || !strings.Contains(err.Error(), `unsupported api_style "custom_style"`) {
-		t.Fatalf("expected unsupported custom api_style, got %v", err)
+	if _, err := supportedChatProtocol(provider.RuntimeConfig{Driver: provider.DriverAnthropic}); err == nil ||
+		!strings.Contains(err.Error(), "unsupported chat protocol") {
+		t.Fatalf("expected unsupported anthropic protocol error, got %v", err)
 	}
 }
 
@@ -125,11 +117,10 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 
 	p, err := New(provider.RuntimeConfig{
 		Name:         DriverName,
-		Driver:       DriverName,
+		Driver:       provider.DriverAnthropic,
 		BaseURL:      "https://api.example.com/v1",
 		DefaultModel: "gpt-4.1",
 		APIKey:       "test-key",
-		APIStyle:     "custom_style",
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -137,48 +128,8 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 	err = p.Generate(context.Background(), providertypes.GenerateRequest{
 		Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), `unsupported api_style "custom_style"`) {
-		t.Fatalf("expected unsupported api_style error, got %v", err)
-	}
-
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": []map[string]any{},
-		})
-	}))
-	defer server.Close()
-
-	p, err = New(provider.RuntimeConfig{
-		Name:         DriverName,
-		Driver:       DriverName,
-		BaseURL:      server.URL,
-		DefaultModel: "gpt-4.1",
-		APIKey:       "test-key",
-		APIStyle:     "responses",
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	p.client = server.Client()
-	if _, err := p.DiscoverModels(context.Background()); err != nil {
-		t.Fatalf("expected discovery to ignore chat-only api_style, got %v", err)
-	}
-
-	p, err = New(provider.RuntimeConfig{
-		Name:         DriverName,
-		Driver:       DriverName,
-		BaseURL:      server.URL,
-		DefaultModel: "gpt-4.1",
-		APIKey:       "test-key",
-		APIStyle:     "custom_style",
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	p.client = server.Client()
-	if _, err := p.DiscoverModels(context.Background()); err != nil {
-		t.Fatalf("expected discovery to ignore unknown chat-only api_style, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported chat protocol") {
+		t.Fatalf("expected unsupported chat protocol error, got %v", err)
 	}
 }
 

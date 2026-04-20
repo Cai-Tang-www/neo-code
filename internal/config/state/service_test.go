@@ -81,7 +81,6 @@ func TestSelectionServiceBuiltinUnsupportedAPIStyleNoLongerFailsAcrossSnapshotPa
 	t.Parallel()
 
 	providerCfg := openAIProviderForTest()
-	providerCfg.APIStyle = "responses"
 
 	defaults := testDefaultConfig()
 	defaults.Providers = []configpkg.ProviderConfig{providerCfg}
