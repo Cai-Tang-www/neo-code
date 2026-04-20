@@ -1212,6 +1212,16 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantTarget:   "todo-1",
 		},
 		{
+			name: "spawn subagent maps target from items",
+			input: ToolCallInput{
+				Name:      "spawn_subagent",
+				Arguments: []byte(`{"items":[{"id":"task-a"},{"id":"task-b"}]}`),
+			},
+			wantType:     security.ActionTypeWrite,
+			wantResource: "spawn_subagent",
+			wantTarget:   "task-a,task-b",
+		},
+		{
 			name: "mcp tool maps to mcp action",
 			input: ToolCallInput{
 				Name:      "mcp.github.create_issue",
@@ -1302,6 +1312,16 @@ func TestPermissionMapperHelpers(t *testing.T) {
 			want:  "",
 		},
 		{
+			name:  "extract spawn target from items",
+			input: []byte(`{"items":[{"id":"task-a"},{"id":" task-b "}],"id":"fallback"}`),
+			want:  "task-a,task-b",
+		},
+		{
+			name:  "extract spawn target falls back to top level id",
+			input: []byte(`{"id":"legacy-task"}`),
+			want:  "legacy-task",
+		},
+		{
 			name:       "mcp server target with server and tool",
 			serverTool: "mcp.github.create_issue",
 			serverWant: "mcp.github",
@@ -1326,6 +1346,11 @@ func TestPermissionMapperHelpers(t *testing.T) {
 			if tt.key != "" {
 				if got := extractStringArgument(tt.input, tt.key); got != tt.want {
 					t.Fatalf("expected %q, got %q", tt.want, got)
+				}
+			}
+			if tt.key == "" && len(tt.input) > 0 {
+				if got := extractSpawnSubAgentTarget(tt.input); got != tt.want {
+					t.Fatalf("spawn target expected %q, got %q", tt.want, got)
 				}
 			}
 			if tt.serverTool != "" {

@@ -87,7 +87,7 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "spawn_subagent"
 		action.Payload.TargetType = security.TargetTypePath
-		action.Payload.Target = extractStringArgument(input.Arguments, "id")
+		action.Payload.Target = extractSpawnSubAgentTarget(input.Arguments)
 	case "memo_remember":
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "memo_remember"
@@ -141,4 +141,37 @@ func extractStringArgument(raw []byte, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+// extractSpawnSubAgentTarget 提取 spawn_subagent 的稳定权限目标，优先使用 items[].id，回退到顶层 id。
+func extractSpawnSubAgentTarget(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	type spawnItem struct {
+		ID string `json:"id"`
+	}
+	type spawnPayload struct {
+		ID    string      `json:"id"`
+		Items []spawnItem `json:"items"`
+	}
+
+	var payload spawnPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+
+	ids := make([]string, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) > 0 {
+		return strings.Join(ids, ",")
+	}
+	return strings.TrimSpace(payload.ID)
 }

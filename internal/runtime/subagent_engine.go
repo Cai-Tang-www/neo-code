@@ -544,6 +544,10 @@ func isRecoverableSubAgentToolError(err error, result subagent.ToolExecutionResu
 	if err == nil {
 		return true
 	}
+	if errors.Is(err, errPermissionApprovalPending) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	// 工具返回结构化错误结果（例如命令退出码、参数校验失败）时，允许回灌给模型自修复。
 	if result.IsError {
 		return true

@@ -73,6 +73,12 @@ func TestSubAgentEngineHelperFunctions(t *testing.T) {
 	if !isRecoverableSubAgentToolError(errors.New("exit status 1"), subagent.ToolExecutionResult{IsError: true}) {
 		t.Fatalf("structured tool error should be recoverable")
 	}
+	if isRecoverableSubAgentToolError(
+		fmt.Errorf("wrapped: %w", errPermissionApprovalPending),
+		subagent.ToolExecutionResult{IsError: true},
+	) {
+		t.Fatalf("approval pending should not be recoverable")
+	}
 	if !isSubAgentPermissionDeniedError(errors.New(permissionRejectedErrorMessage)) {
 		t.Fatalf("permission rejected message should be recognized")
 	}
