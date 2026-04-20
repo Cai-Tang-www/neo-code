@@ -141,6 +141,9 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentTaskProgress]; !ok {
 		t.Fatalf("expected subagent_task_progress handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentDispatchTaskFailed]; !ok {
+		t.Fatalf("expected subagent_dispatch_task_failed handler to be registered")
+	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentDispatchFinished]; !ok {
 		t.Fatalf("expected subagent_dispatch_finished handler to be registered")
 	}
@@ -414,6 +417,18 @@ func TestRuntimeEventSubAgentTaskLifecycleHandlerBranches(t *testing.T) {
 			wantTitle:  "Subagent task failed",
 			wantError:  true,
 			wantDetail: "task=task-failed attempt=2 reason=boom",
+		},
+		{
+			name:      "dispatch failed marks error",
+			eventType: agentruntime.EventSubAgentDispatchTaskFailed,
+			payload: map[string]any{
+				"task_id":  "task-dispatch-failed",
+				"attempts": 1,
+				"reason":   "dependency_failed",
+			},
+			wantTitle:  "Subagent dispatch task failed",
+			wantError:  true,
+			wantDetail: "task=task-dispatch-failed attempt=1 reason=dependency_failed",
 		},
 		{
 			name:      "canceled refresh failure still emits activity",

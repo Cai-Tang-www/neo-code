@@ -88,6 +88,9 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Operation = "spawn_subagent"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractSpawnSubAgentTarget(input.Arguments)
+		if action.Payload.Target == "" {
+			return security.Action{}, fmt.Errorf("tools: spawn_subagent target is empty")
+		}
 	case "memo_remember":
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "memo_remember"

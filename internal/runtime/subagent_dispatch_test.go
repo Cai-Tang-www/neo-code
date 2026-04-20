@@ -178,6 +178,58 @@ func TestDispatchTodosSkipsAgentOwnedTodos(t *testing.T) {
 	}
 }
 
+func TestDispatchTodosTreatsBlockedStateChangeAsProgress(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, nil)
+	store := newMemoryStore()
+	service := NewWithFactory(
+		manager,
+		tools.NewRegistry(),
+		store,
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		&stubContextBuilder{},
+	)
+
+	session := agentsession.New("dispatch-blocked-progress")
+	if err := session.ReplaceTodos([]agentsession.TodoItem{
+		{
+			ID:           "blocked-1",
+			Content:      "blocked by dependency unmet",
+			Executor:     agentsession.TodoExecutorSubAgent,
+			Dependencies: []string{"blocked-2"},
+		},
+		{
+			ID:          "blocked-2",
+			Content:     "wait for retry window",
+			Executor:    agentsession.TodoExecutorSubAgent,
+			Status:      agentsession.TodoStatusBlocked,
+			NextRetryAt: time.Now().Add(10 * time.Minute),
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos() error = %v", err)
+	}
+	saveSessionToMemoryStore(store, session)
+	state := newRunState("run-dispatch-blocked-progress", session)
+	state.phase = controlplane.PhaseDispatch
+
+	progressed, err := service.dispatchTodos(context.Background(), &state, turnSnapshot{})
+	if err != nil {
+		t.Fatalf("dispatchTodos() error = %v", err)
+	}
+	if !progressed {
+		t.Fatalf("dispatchTodos() progressed = false, want true")
+	}
+
+	task, ok := state.session.FindTodo("blocked-1")
+	if !ok {
+		t.Fatalf("FindTodo(blocked-1) not found")
+	}
+	if task.Status != agentsession.TodoStatusBlocked {
+		t.Fatalf("status = %q, want blocked", task.Status)
+	}
+}
+
 func TestDispatchTodosUsesExtendedDefaultTaskTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -678,7 +730,7 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 	}
 	assertEventContains(t, events, EventSubAgentRetried)
 	assertEventContains(t, events, EventSubAgentBlocked)
-	assertEventContains(t, events, EventSubAgentFailed)
+	assertEventContains(t, events, EventSubAgentDispatchTaskFailed)
 	assertEventContains(t, events, EventSubAgentFinished)
 
 	for _, event := range events {
@@ -710,7 +762,7 @@ func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T
 			if payload.TaskID == "task-2a" && !payload.PendingApproval {
 				t.Fatalf("blocked approval payload should set pending_approval=true")
 			}
-		case EventSubAgentFailed:
+		case EventSubAgentDispatchTaskFailed:
 			if payload.TaskID != "task-3" || payload.Step != 1 {
 				t.Fatalf("failed payload task/step = %q/%d, want task-3/1", payload.TaskID, payload.Step)
 			}

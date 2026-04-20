@@ -56,6 +56,8 @@ const (
 	EventSubAgentTaskCompleted EventType = "subagent_task_completed"
 	// EventSubAgentTaskFailed 在子代理失败结束后触发。
 	EventSubAgentTaskFailed EventType = "subagent_task_failed"
+	// EventSubAgentDispatchTaskFailed 在调度层判定任务失败（如依赖失败）时触发。
+	EventSubAgentDispatchTaskFailed EventType = "subagent_dispatch_task_failed"
 	// EventSubAgentTaskCanceled 在子代理被取消后触发。
 	EventSubAgentTaskCanceled EventType = "subagent_task_canceled"
 	// EventSubAgentDispatchFinished 在一次调度轮次结束后触发。

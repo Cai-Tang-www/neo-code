@@ -1014,6 +1014,7 @@ var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentrun
 	agentruntime.EventSubAgentTaskBlocked:                      runtimeEventSubAgentTaskLifecycleHandler,
 	agentruntime.EventSubAgentTaskCompleted:                    runtimeEventSubAgentTaskLifecycleHandler,
 	agentruntime.EventSubAgentTaskFailed:                       runtimeEventSubAgentTaskLifecycleHandler,
+	agentruntime.EventSubAgentDispatchTaskFailed:               runtimeEventSubAgentTaskLifecycleHandler,
 	agentruntime.EventSubAgentTaskCanceled:                     runtimeEventSubAgentTaskLifecycleHandler,
 	agentruntime.EventSubAgentDispatchFinished:                 runtimeEventSubAgentDispatchFinishedHandler,
 }
@@ -1163,6 +1164,9 @@ func runtimeEventSubAgentTaskLifecycleHandler(a *App, event agentruntime.Runtime
 		a.setRunProgress(0.78, "Subagent completed")
 	case agentruntime.EventSubAgentTaskFailed:
 		title = "Subagent task failed"
+		isError = true
+	case agentruntime.EventSubAgentDispatchTaskFailed:
+		title = "Subagent dispatch task failed"
 		isError = true
 	case agentruntime.EventSubAgentTaskCanceled:
 		title = "Subagent task canceled"

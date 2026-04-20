@@ -986,7 +986,7 @@ func hasSchedulablePotential(order []string, byID map[string]agentsession.TodoIt
 			return true
 		}
 		if !todoDispatchableBySubAgent(item) {
-			return false
+			return agentDependencySchedulable(item)
 		}
 		if item.Status == agentsession.TodoStatusFailed || item.Status == agentsession.TodoStatusCanceled {
 			return false
@@ -1023,6 +1023,11 @@ func hasSchedulablePotential(order []string, byID map[string]agentsession.TodoIt
 		}
 	}
 	return false
+}
+
+// agentDependencySchedulable 判断非 subagent 依赖是否仍有被外部路径推进到完成态的可能。
+func agentDependencySchedulable(item agentsession.TodoItem) bool {
+	return item.Status != agentsession.TodoStatusFailed && item.Status != agentsession.TodoStatusCanceled
 }
 
 // collectBlockedLeft 汇总结束时仍处于非终态的任务 ID。
@@ -1074,6 +1079,18 @@ func appendUniqueString(dst *[]string, value string) {
 
 // resolveTaskFailureReason 统一提取失败原因，保证回写文本稳定可读。
 func resolveTaskFailureReason(outcome taskOutcome) string {
+	if outcome.err != nil {
+		if text := strings.TrimSpace(outcome.err.Error()); text != "" {
+			if isApprovalPendingErrorText(text) {
+				return schedulerReasonApprovalPending
+			}
+		}
+	}
+	if text := strings.TrimSpace(outcome.result.Error); text != "" {
+		if isApprovalPendingErrorText(text) {
+			return schedulerReasonApprovalPending
+		}
+	}
 	switch outcome.result.StopReason {
 	case StopReasonMaxSteps:
 		return "budget exhausted: max steps reached"
@@ -1082,16 +1099,10 @@ func resolveTaskFailureReason(outcome taskOutcome) string {
 	}
 	if outcome.err != nil {
 		if text := strings.TrimSpace(outcome.err.Error()); text != "" {
-			if isApprovalPendingErrorText(text) {
-				return schedulerReasonApprovalPending
-			}
 			return text
 		}
 	}
 	if text := strings.TrimSpace(outcome.result.Error); text != "" {
-		if isApprovalPendingErrorText(text) {
-			return schedulerReasonApprovalPending
-		}
 		return text
 	}
 	return "subagent task execution failed"

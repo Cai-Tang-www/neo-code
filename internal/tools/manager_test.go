@@ -1222,6 +1222,14 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantTarget:   "task-a,task-b",
 		},
 		{
+			name: "spawn subagent with empty target returns error",
+			input: ToolCallInput{
+				Name:      "spawn_subagent",
+				Arguments: []byte(`{"items":[{"id":" "}]}`),
+			},
+			wantErr: "spawn_subagent target is empty",
+		},
+		{
 			name: "mcp tool maps to mcp action",
 			input: ToolCallInput{
 				Name:      "mcp.github.create_issue",

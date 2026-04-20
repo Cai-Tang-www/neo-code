@@ -76,6 +76,9 @@ func (s *Service) dispatchTodos(ctx context.Context, state *runState, snapshot t
 		len(result.Failed) > 0 ||
 		len(result.Recovered) > 0 ||
 		len(result.Retried) > 0
+	if !progressed {
+		progressed = computeTodoStateSignature(todos) != computeTodoStateSignature(store.ListTodos())
+	}
 	if progressed {
 		return true, nil
 	}
@@ -177,7 +180,7 @@ func (s *Service) emitSubAgentSchedulerEvent(
 	case subagent.SchedulerEventBlocked:
 		_ = s.emitRunScoped(ctx, EventSubAgentTaskBlocked, state, payload)
 	case subagent.SchedulerEventSubAgentFailed:
-		_ = s.emitRunScoped(ctx, EventSubAgentTaskFailed, state, payload)
+		_ = s.emitRunScoped(ctx, EventSubAgentDispatchTaskFailed, state, payload)
 	case subagent.SchedulerEventFinished:
 		payload.TaskID = ""
 		payload.Step = 0

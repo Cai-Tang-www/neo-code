@@ -1724,6 +1724,31 @@ func TestSchedulerHelpersCoverage(t *testing.T) {
 		t.Fatalf("collectBlockedLeft() = %v, want [b d]", left)
 	}
 
+	if !hasSchedulablePotential([]string{"agent", "sub"}, mapTodosByID([]agentsession.TodoItem{
+		{ID: "agent", Content: "agent", Status: agentsession.TodoStatusPending, Executor: agentsession.TodoExecutorAgent},
+		{
+			ID:           "sub",
+			Content:      "sub",
+			Status:       agentsession.TodoStatusBlocked,
+			Executor:     agentsession.TodoExecutorSubAgent,
+			Dependencies: []string{"agent"},
+		},
+	})) {
+		t.Fatalf("hasSchedulablePotential() should treat non-terminal agent dependency as schedulable potential")
+	}
+	if hasSchedulablePotential([]string{"agent", "sub"}, mapTodosByID([]agentsession.TodoItem{
+		{ID: "agent", Content: "agent", Status: agentsession.TodoStatusFailed, Executor: agentsession.TodoExecutorAgent},
+		{
+			ID:           "sub",
+			Content:      "sub",
+			Status:       agentsession.TodoStatusBlocked,
+			Executor:     agentsession.TodoExecutorSubAgent,
+			Dependencies: []string{"agent"},
+		},
+	})) {
+		t.Fatalf("hasSchedulablePotential() should be false when agent dependency is terminal failed")
+	}
+
 	outcome := taskOutcome{err: errors.New(" boom ")}
 	if got := resolveTaskFailureReason(outcome); got != "boom" {
 		t.Fatalf("resolveTaskFailureReason(err) = %q, want boom", got)
@@ -1739,6 +1764,13 @@ func TestSchedulerHelpersCoverage(t *testing.T) {
 	outcome = taskOutcome{result: Result{Error: "approval_pending: request_id=req-1"}}
 	if got := resolveTaskFailureReason(outcome); got != schedulerReasonApprovalPending {
 		t.Fatalf("resolveTaskFailureReason(result approval pending) = %q, want %q", got, schedulerReasonApprovalPending)
+	}
+	outcome = taskOutcome{
+		err:    errors.New("runtime: approval_pending"),
+		result: Result{StopReason: StopReasonTimeout},
+	}
+	if got := resolveTaskFailureReason(outcome); got != schedulerReasonApprovalPending {
+		t.Fatalf("resolveTaskFailureReason(timeout + approval pending) = %q, want %q", got, schedulerReasonApprovalPending)
 	}
 	if got := resolveTaskFailureReason(taskOutcome{}); got == "" {
 		t.Fatalf("resolveTaskFailureReason() should return fallback")
