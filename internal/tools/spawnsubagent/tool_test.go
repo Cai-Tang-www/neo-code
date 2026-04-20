@@ -3,6 +3,8 @@ package spawnsubagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,6 +14,11 @@ import (
 
 type stubMutator struct {
 	session *agentsession.Session
+}
+
+type failingAddMutator struct {
+	*stubMutator
+	err error
 }
 
 func (m *stubMutator) ListTodos() []agentsession.TodoItem {
@@ -28,6 +35,13 @@ func (m *stubMutator) ReplaceTodos(items []agentsession.TodoItem) error {
 
 func (m *stubMutator) AddTodo(item agentsession.TodoItem) error {
 	return m.session.AddTodo(item)
+}
+
+func (m *failingAddMutator) AddTodo(item agentsession.TodoItem) error {
+	if m.err != nil {
+		return m.err
+	}
+	return m.stubMutator.AddTodo(item)
 }
 
 func (m *stubMutator) UpdateTodo(id string, patch agentsession.TodoPatch, expectedRevision int64) error {
@@ -214,6 +228,102 @@ func TestParseSpawnInputAndHelpers(t *testing.T) {
 	result := renderSpawnResult([]string{"a", "b"})
 	if !strings.Contains(result, "created_count: 2") || !strings.Contains(result, "- a") {
 		t.Fatalf("renderSpawnResult() = %q", result)
+	}
+}
+
+func TestToolExecuteErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	tool := New()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := tool.Execute(ctx, tools.ToolCallInput{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: []byte(`{"items":[{"id":"t1","content":"x"}]}`),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute() canceled err = %v, want context canceled", err)
+	}
+
+	session := agentsession.New("spawn-add-fail")
+	mutator := &failingAddMutator{
+		stubMutator: &stubMutator{session: &session},
+		err:         errors.New("injected add todo failure"),
+	}
+	_, err = tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:           tools.ToolNameSpawnSubAgent,
+		SessionMutator: mutator,
+		Arguments:      []byte(`{"items":[{"id":"t1","content":"x"}]}`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected add todo failure") {
+		t.Fatalf("Execute() add failure err = %v", err)
+	}
+}
+
+func TestParseSpawnInputValidationBranches(t *testing.T) {
+	t.Parallel()
+
+	tooLong := strings.Repeat("x", maxSpawnTextLen+1)
+	tooManyItems := make([]string, 0, maxSpawnItems+1)
+	for i := 0; i < maxSpawnItems+1; i++ {
+		tooManyItems = append(tooManyItems, fmt.Sprintf(`{"id":"t%d","content":"c"}`, i))
+	}
+	tooManyDeps := make([]string, 0, maxSpawnListItems+1)
+	for i := 0; i < maxSpawnListItems+1; i++ {
+		tooManyDeps = append(tooManyDeps, fmt.Sprintf(`"d%d"`, i))
+	}
+	tooManyAcc := make([]string, 0, maxSpawnListItems+1)
+	for i := 0; i < maxSpawnListItems+1; i++ {
+		tooManyAcc = append(tooManyAcc, fmt.Sprintf(`"a%d"`, i))
+	}
+	hugeJSON := []byte(`{"items":[{"id":"t1","content":"` + strings.Repeat("z", maxSpawnArgumentsBytes) + `"}]}`)
+
+	tests := []struct {
+		name    string
+		raw     []byte
+		wantErr string
+	}{
+		{name: "empty arguments", raw: nil, wantErr: "arguments is empty"},
+		{name: "too large payload", raw: hugeJSON, wantErr: "payload exceeds"},
+		{name: "too many items", raw: []byte(`{"items":[` + strings.Join(tooManyItems, ",") + `]}`), wantErr: "items exceeds max length"},
+		{name: "id empty", raw: []byte(`{"items":[{"id":"  ","content":"x"}]}`), wantErr: "id is empty"},
+		{name: "content empty", raw: []byte(`{"items":[{"id":"t1","content":"  "}]}`), wantErr: "content is empty"},
+		{name: "id too long", raw: []byte(`{"items":[{"id":"` + tooLong + `","content":"x"}]}`), wantErr: ".id exceeds max length"},
+		{name: "content too long", raw: []byte(`{"items":[{"id":"t1","content":"` + tooLong + `"}]}`), wantErr: ".content exceeds max length"},
+		{name: "dependencies too many", raw: []byte(`{"items":[{"id":"t1","content":"x","dependencies":[` + strings.Join(tooManyDeps, ",") + `]}]}`), wantErr: "dependencies exceeds max items"},
+		{name: "acceptance too many", raw: []byte(`{"items":[{"id":"t1","content":"x","acceptance":[` + strings.Join(tooManyAcc, ",") + `]}]}`), wantErr: "acceptance exceeds max items"},
+		{name: "dependency entry too long", raw: []byte(`{"items":[{"id":"t1","content":"x","dependencies":["` + tooLong + `"]}]}`), wantErr: ".dependencies[0] exceeds max length"},
+		{name: "acceptance entry too long", raw: []byte(`{"items":[{"id":"t1","content":"x","acceptance":["` + tooLong + `"]}]}`), wantErr: ".acceptance[0] exceeds max length"},
+		{name: "negative retry limit", raw: []byte(`{"items":[{"id":"t1","content":"x","retry_limit":-1}]}`), wantErr: "retry_limit must be >= 0"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseSpawnInput(tt.raw)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("parseSpawnInput() err = %v, want contains %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestResolveSpawnOrderAdditionalBranches(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveSpawnOrder([]agentsession.TodoItem{{ID: "exists", Content: "old"}}, []spawnItem{
+		{ID: "exists", Content: "new"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("resolveSpawnOrder(existing) err = %v", err)
+	}
+
+	_, err = resolveSpawnOrder(nil, []spawnItem{
+		{ID: "a", Content: "a", Dependencies: []string{"b"}},
+		{ID: "b", Content: "b", Dependencies: []string{"a"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cyclic dependencies detected") {
+		t.Fatalf("resolveSpawnOrder(cycle) err = %v", err)
 	}
 }
 
