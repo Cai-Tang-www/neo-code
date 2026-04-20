@@ -27,6 +27,16 @@ func TestRuntimeConfigClone(t *testing.T) {
 			cloned.SubAgentDispatchConcurrency,
 		)
 	}
+	if cloned.Assets.MaxSessionAssetBytes != cfg.Assets.MaxSessionAssetBytes {
+		t.Fatalf("expected cloned MaxSessionAssetBytes=%d, got %d", cfg.Assets.MaxSessionAssetBytes, cloned.Assets.MaxSessionAssetBytes)
+	}
+	if cloned.Assets.MaxSessionAssetsTotalBytes != cfg.Assets.MaxSessionAssetsTotalBytes {
+		t.Fatalf(
+			"expected cloned MaxSessionAssetsTotalBytes=%d, got %d",
+			cfg.Assets.MaxSessionAssetsTotalBytes,
+			cloned.Assets.MaxSessionAssetsTotalBytes,
+		)
+	}
 }
 
 func TestRuntimeConfigApplyDefaults(t *testing.T) {
@@ -37,6 +47,10 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 		MaxRepeatCycleStreak:        5,
 		MaxTurn:                     20,
 		SubAgentDispatchConcurrency: 2,
+		Assets: RuntimeAssetsConfig{
+			MaxSessionAssetBytes:       11,
+			MaxSessionAssetsTotalBytes: 22,
+		},
 	}
 
 	cfg := RuntimeConfig{MaxNoProgressStreak: 0, MaxRepeatCycleStreak: 0, MaxTurn: 0, SubAgentDispatchConcurrency: 0}
@@ -55,6 +69,12 @@ func TestRuntimeConfigApplyDefaults(t *testing.T) {
 			"expected defaulted SubAgentDispatchConcurrency=2, got %d",
 			cfg.SubAgentDispatchConcurrency,
 		)
+	}
+	if cfg.Assets.MaxSessionAssetBytes != 11 {
+		t.Fatalf("expected defaulted MaxSessionAssetBytes=11, got %d", cfg.Assets.MaxSessionAssetBytes)
+	}
+	if cfg.Assets.MaxSessionAssetsTotalBytes != 22 {
+		t.Fatalf("expected defaulted MaxSessionAssetsTotalBytes=22, got %d", cfg.Assets.MaxSessionAssetsTotalBytes)
 	}
 
 	cfg = RuntimeConfig{
@@ -158,5 +178,67 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		}).Validate(); err == nil {
 			t.Fatalf("expected validation error for SubAgentDispatchConcurrency=%d", bad)
 		}
+	}
+
+	if err := (RuntimeConfig{
+		MaxNoProgressStreak:         1,
+		MaxRepeatCycleStreak:        1,
+		MaxTurn:                     1,
+		SubAgentDispatchConcurrency: 1,
+		Assets: RuntimeAssetsConfig{
+			MaxSessionAssetBytes:       1,
+			MaxSessionAssetsTotalBytes: 1,
+		},
+	}).Validate(); err != nil {
+		t.Fatalf("expected valid assets config, got %v", err)
+	}
+	if err := (RuntimeConfig{
+		MaxNoProgressStreak:         1,
+		MaxRepeatCycleStreak:        1,
+		MaxTurn:                     1,
+		SubAgentDispatchConcurrency: 1,
+		Assets: RuntimeAssetsConfig{
+			MaxSessionAssetBytes:       -1,
+			MaxSessionAssetsTotalBytes: 1,
+		},
+	}).Validate(); err == nil {
+		t.Fatal("expected validation error for assets.max_session_asset_bytes=-1")
+	}
+	if err := (RuntimeConfig{
+		MaxNoProgressStreak:         1,
+		MaxRepeatCycleStreak:        1,
+		MaxTurn:                     1,
+		SubAgentDispatchConcurrency: 1,
+		Assets: RuntimeAssetsConfig{
+			MaxSessionAssetBytes:       1,
+			MaxSessionAssetsTotalBytes: -1,
+		},
+	}).Validate(); err == nil {
+		t.Fatal("expected validation error for assets.max_session_assets_total_bytes=-1")
+	}
+}
+
+func TestRuntimeAssetsConfigZeroValuesResolveToDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := RuntimeAssetsConfig{
+		MaxSessionAssetBytes:       0,
+		MaxSessionAssetsTotalBytes: 0,
+	}
+	resolved := cfg.ResolveSessionAssetLimits()
+	defaults := defaultRuntimeAssetsConfig()
+	if resolved.MaxSessionAssetBytes != defaults.MaxSessionAssetBytes {
+		t.Fatalf(
+			"expected MaxSessionAssetBytes to fallback to default=%d, got %d",
+			defaults.MaxSessionAssetBytes,
+			resolved.MaxSessionAssetBytes,
+		)
+	}
+	if resolved.MaxSessionAssetsTotalBytes != defaults.MaxSessionAssetsTotalBytes {
+		t.Fatalf(
+			"expected MaxSessionAssetsTotalBytes to fallback to default=%d, got %d",
+			defaults.MaxSessionAssetsTotalBytes,
+			resolved.MaxSessionAssetsTotalBytes,
+		)
 	}
 }
