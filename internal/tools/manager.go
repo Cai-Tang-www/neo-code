@@ -426,26 +426,21 @@ func isSandboxOutsideWriteApprovalCandidate(action security.Action, sandboxErr e
 
 // isWorkspaceBoundaryViolationError 判断错误是否由工作区边界校验触发。
 func isWorkspaceBoundaryViolationError(err error) bool {
-	return sandboxErrorMessageContains(err, "escapes workspace root", "different volume than workspace root")
-}
-
-// isWorkspaceSymlinkViolationError 判断沙箱拒绝是否来自符号链接越界逃逸。
-func isWorkspaceSymlinkViolationError(err error) bool {
-	return sandboxErrorMessageContains(err, "escapes workspace root via symlink")
-}
-
-// sandboxErrorMessageContains 统一处理沙箱错误文本归一化与关键词匹配。
-func sandboxErrorMessageContains(err error, fragments ...string) bool {
 	message := strings.ToLower(strings.TrimSpace(errorMessage(err)))
 	if message == "" {
 		return false
 	}
-	for _, fragment := range fragments {
-		if strings.Contains(message, strings.ToLower(strings.TrimSpace(fragment))) {
-			return true
-		}
+	return strings.Contains(message, "escapes workspace root") ||
+		strings.Contains(message, "different volume than workspace root")
+}
+
+// isWorkspaceSymlinkViolationError 判断沙箱拒绝是否来自符号链接越界逃逸。
+func isWorkspaceSymlinkViolationError(err error) bool {
+	message := strings.ToLower(strings.TrimSpace(errorMessage(err)))
+	if message == "" {
+		return false
 	}
-	return false
+	return strings.Contains(message, "escapes workspace root via symlink")
 }
 
 // resolveActionSandboxTargetPath 将 action 的 sandbox target 解析为可判定风险的绝对路径。
@@ -486,11 +481,6 @@ func isLowRiskExternalWritePath(targetPath string) bool {
 
 // isUserStartupProfilePath 判断路径是否命中用户级 shell/profile 启动文件，命中后必须保持硬拒绝。
 func isUserStartupProfilePath(path string) bool {
-	return isUserStartupProfilePathForOS(path, runtime.GOOS)
-}
-
-// isUserStartupProfilePathForOS 按指定操作系统判定路径是否命中用户级 shell/profile 启动文件。
-func isUserStartupProfilePathForOS(path string, goos string) bool {
 	cleaned := strings.ToLower(strings.TrimSpace(filepath.Clean(path)))
 	if cleaned == "" || cleaned == "." {
 		return false
@@ -499,7 +489,8 @@ func isUserStartupProfilePathForOS(path string, goos string) bool {
 	base := filepath.Base(cleaned)
 	switch base {
 	case ".bashrc", ".bash_profile", ".bash_login", ".profile",
-		".zshrc", ".zprofile", ".zlogin", ".zshenv", ".cshrc", ".tcshrc",
+		".zshrc", ".zprofile", ".zlogin", ".zshenv",
+		".cshrc", ".tcshrc", "config.fish",
 		"profile.ps1", "microsoft.powershell_profile.ps1",
 		"microsoft.vscode_profile.ps1", "profile":
 		return true
@@ -509,7 +500,7 @@ func isUserStartupProfilePathForOS(path string, goos string) bool {
 	if len(segments) == 0 {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
+	if runtime.GOOS == "windows" {
 		for i := 0; i+2 < len(segments); i++ {
 			if segments[i] == "documents" && segments[i+1] == "windowspowershell" && strings.HasSuffix(base, ".ps1") {
 				return true
@@ -530,23 +521,18 @@ func isUserStartupProfilePathForOS(path string, goos string) bool {
 
 // isSystemProtectedPath 判定路径是否命中系统受保护目录，命中后必须保持硬拒绝。
 func isSystemProtectedPath(path string) bool {
-	return isSystemProtectedPathForOS(path, runtime.GOOS)
-}
-
-// isSystemProtectedPathForOS 按指定操作系统判定路径是否命中系统受保护目录。
-func isSystemProtectedPathForOS(path string, goos string) bool {
 	normalized := strings.ToLower(filepath.Clean(path))
-	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
+	if runtime.GOOS == "windows" {
 		volume := strings.ToLower(filepath.VolumeName(normalized))
-		if volume == "" && len(normalized) >= 2 && normalized[1] == ':' {
-			volume = normalized[:2]
-		}
 		rest := strings.TrimPrefix(normalized, volume)
 		rest = strings.TrimLeft(rest, `\/`)
 		if rest == "" {
 			return true
 		}
 		segments := splitPathSegments(rest)
+		if len(segments) == 0 {
+			return true
+		}
 		switch segments[0] {
 		case "windows", "program files", "program files (x86)", "programdata",
 			"$recycle.bin", "system volume information", "recovery", "boot":
