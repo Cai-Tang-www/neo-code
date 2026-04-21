@@ -333,15 +333,19 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 
 	plan, err := m.sandbox.Check(ctx, action)
 	if err != nil {
+		allowBySandboxApproval := false
 		if decision, decisionMatched := resolveSandboxOutsideWriteDecision(input, action, err, m.sessionDecisions); decisionMatched {
 			if decision.Decision != security.DecisionAllow {
 				result := blockedToolResult(input, decision)
 				return result, permissionErrorFromDecision(decision)
 			}
+			allowBySandboxApproval = true
 		}
-		result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
-		result.ToolCallID = input.ID
-		return result, err
+		if !allowBySandboxApproval {
+			result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
+			result.ToolCallID = input.ID
+			return result, err
+		}
 	}
 	m.auditCapabilityDecision(action, string(security.DecisionAllow), "")
 
@@ -422,21 +426,26 @@ func isSandboxOutsideWriteApprovalCandidate(action security.Action, sandboxErr e
 
 // isWorkspaceBoundaryViolationError 判断错误是否由工作区边界校验触发。
 func isWorkspaceBoundaryViolationError(err error) bool {
-	message := strings.ToLower(strings.TrimSpace(errorMessage(err)))
-	if message == "" {
-		return false
-	}
-	return strings.Contains(message, "escapes workspace root") ||
-		strings.Contains(message, "different volume than workspace root")
+	return sandboxErrorMessageContains(err, "escapes workspace root", "different volume than workspace root")
 }
 
 // isWorkspaceSymlinkViolationError 判断沙箱拒绝是否来自符号链接越界逃逸。
 func isWorkspaceSymlinkViolationError(err error) bool {
+	return sandboxErrorMessageContains(err, "escapes workspace root via symlink")
+}
+
+// sandboxErrorMessageContains 统一处理沙箱错误文本归一化与关键词匹配。
+func sandboxErrorMessageContains(err error, fragments ...string) bool {
 	message := strings.ToLower(strings.TrimSpace(errorMessage(err)))
 	if message == "" {
 		return false
 	}
-	return strings.Contains(message, "escapes workspace root via symlink")
+	for _, fragment := range fragments {
+		if strings.Contains(message, strings.ToLower(strings.TrimSpace(fragment))) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveActionSandboxTargetPath 将 action 的 sandbox target 解析为可判定风险的绝对路径。
@@ -593,8 +602,12 @@ func splitPathSegments(path string) []string {
 
 // sandboxErrorDetails 生成可回灌给模型的沙箱拒绝详情，便于模型正确感知失败原因。
 func sandboxErrorDetails(action security.Action, sandboxErr error) string {
+	sandboxMessage := strings.TrimSpace(errorMessage(sandboxErr))
+	if !strings.HasPrefix(strings.ToLower(sandboxMessage), "security:") {
+		sandboxMessage = "security: " + sandboxMessage
+	}
 	parts := []string{
-		"security: " + strings.TrimSpace(errorMessage(sandboxErr)),
+		sandboxMessage,
 	}
 	if workdir := strings.TrimSpace(action.Payload.Workdir); workdir != "" {
 		parts = append(parts, "workdir: "+workdir)

@@ -208,7 +208,7 @@ func TestDefaultManagerListAvailableSpecsBoundaries(t *testing.T) {
 			expectErr: "manager executor is nil",
 		},
 		{
-			name: func() string { return "canceled context" }(),
+			name: "canceled context",
 			manager: func() *DefaultManager {
 				registry := NewRegistry()
 				registry.Register(&managerStubTool{name: "bash"})
@@ -452,11 +452,11 @@ func TestDefaultManagerSandboxOutsideWriteSessionMemory(t *testing.T) {
 	}
 
 	_, err = manager.Execute(context.Background(), input)
-	if err == nil || !strings.Contains(err.Error(), "escapes workspace root") {
-		t.Fatalf("expected sandbox rejection after remembered allow, got %v", err)
+	if err != nil {
+		t.Fatalf("expected remembered allow retry to execute, got %v", err)
 	}
-	if writeTool.callCount != 0 {
-		t.Fatalf("expected write tool not to execute after remembered allow, got %d", writeTool.callCount)
+	if writeTool.callCount != 1 {
+		t.Fatalf("expected write tool to execute once after remembered allow, got %d", writeTool.callCount)
 	}
 }
 
@@ -709,7 +709,7 @@ func TestSandboxErrorDetailsIncludesWorkspaceContext(t *testing.T) {
 
 	details := sandboxErrorDetails(action, errors.New("security: path escapes workspace root"))
 	for _, fragment := range []string{
-		"security: security: path escapes workspace root",
+		"security: path escapes workspace root",
 		"workdir: " + action.Payload.Workdir,
 		"target: " + action.Payload.Target,
 		"sandbox_target: " + action.Payload.SandboxTarget,
