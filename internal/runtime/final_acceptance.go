@@ -13,6 +13,36 @@ import (
 
 const finalContinueReminder = "There are unfinished required todos or unmet acceptance checks. Continue execution. Do not finalize yet."
 
+var taskTypeKeywordRules = []struct {
+	taskType string
+	keywords []string
+}{
+	{
+		taskType: "fix_bug",
+		keywords: []string{"fix bug", "bugfix", "修复", "故障", "问题"},
+	},
+	{
+		taskType: "refactor",
+		keywords: []string{"refactor", "重构"},
+	},
+	{
+		taskType: "edit_code",
+		keywords: []string{"edit code", "modify code", "patch", "修改代码", "改代码", "打补丁"},
+	},
+	{
+		taskType: "create_file",
+		keywords: []string{"create file", "scaffold", "创建文件", "新增文件", "脚手架"},
+	},
+	{
+		taskType: "docs",
+		keywords: []string{"docs", "documentation", "文档", "说明"},
+	},
+	{
+		taskType: "config",
+		keywords: []string{"config", "yaml", "json", "配置"},
+	},
+}
+
 // beforeAcceptFinal 在 runtime 接受模型 final 前执行双门控验收。
 func (s *Service) beforeAcceptFinal(
 	ctx context.Context,
@@ -95,14 +125,14 @@ func buildVerifyTodos(items []agentsession.TodoItem) []verify.TodoSnapshot {
 	todos := make([]verify.TodoSnapshot, 0, len(items))
 	for _, item := range items {
 		todos = append(todos, verify.TodoSnapshot{
-			ID:            strings.TrimSpace(item.ID),
-			Content:       strings.TrimSpace(item.Content),
-			Status:        strings.TrimSpace(string(item.Status)),
+			ID:            trimVerifyText(item.ID),
+			Content:       trimVerifyText(item.Content),
+			Status:        trimVerifyText(string(item.Status)),
 			Required:      item.RequiredValue(),
 			BlockedReason: string(item.BlockedReasonValue()),
 			RetryCount:    item.RetryCount,
 			RetryLimit:    item.RetryLimit,
-			FailureReason: strings.TrimSpace(item.FailureReason),
+			FailureReason: trimVerifyText(item.FailureReason),
 		})
 	}
 	return todos
@@ -116,7 +146,7 @@ func buildVerifyMessages(messages []providertypes.Message) []verify.MessageLike 
 	out := make([]verify.MessageLike, 0, len(messages))
 	for _, message := range messages {
 		out = append(out, verify.MessageLike{
-			Role:    strings.TrimSpace(message.Role),
+			Role:    trimVerifyText(message.Role),
 			Content: renderPartsForVerification(message.Parts),
 		})
 	}
@@ -133,7 +163,7 @@ func renderPartsForVerification(parts []providertypes.ContentPart) string {
 		if part.Kind != providertypes.ContentPartText {
 			continue
 		}
-		text := strings.TrimSpace(part.Text)
+		text := trimVerifyText(part.Text)
 		if text == "" {
 			continue
 		}
@@ -150,22 +180,12 @@ func inferTaskType(state *runState) string {
 	corpus := strings.ToLower(strings.TrimSpace(
 		state.taskID + " " + state.session.TaskState.Goal + " " + state.session.TaskState.NextStep,
 	))
-	switch {
-	case strings.Contains(corpus, "fix bug"), strings.Contains(corpus, "bugfix"):
-		return "fix_bug"
-	case strings.Contains(corpus, "refactor"):
-		return "refactor"
-	case strings.Contains(corpus, "edit code"), strings.Contains(corpus, "modify code"), strings.Contains(corpus, "patch"):
-		return "edit_code"
-	case strings.Contains(corpus, "create file"), strings.Contains(corpus, "scaffold"):
-		return "create_file"
-	case strings.Contains(corpus, "docs"), strings.Contains(corpus, "documentation"):
-		return "docs"
-	case strings.Contains(corpus, "config"), strings.Contains(corpus, "yaml"), strings.Contains(corpus, "json"):
-		return "config"
-	default:
-		return "unknown"
+	for _, rule := range taskTypeKeywordRules {
+		if containsAnyKeyword(corpus, rule.keywords...) {
+			return rule.taskType
+		}
 	}
+	return "unknown"
 }
 
 // applyAcceptanceResultProgress 根据 acceptance 输出更新 final 拦截熔断计数器。
@@ -183,4 +203,19 @@ func applyAcceptanceResultProgress(state *runState, decision acceptance.Acceptan
 	default:
 		state.finalInterceptStreak = 0
 	}
+}
+
+// trimVerifyText 统一裁剪 verifier 快照里的字符串字段。
+func trimVerifyText(value string) string {
+	return strings.TrimSpace(value)
+}
+
+// containsAnyKeyword 判断语料中是否命中任一关键词。
+func containsAnyKeyword(corpus string, keywords ...string) bool {
+	for _, keyword := range keywords {
+		if strings.Contains(corpus, keyword) {
+			return true
+		}
+	}
+	return false
 }

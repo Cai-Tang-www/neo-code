@@ -86,62 +86,47 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 
 	app.state.ExecutionError = ""
 	app.state.StatusText = "not-ready"
-	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonCompleted},
-	})
+	applyStopReason(&app, agentruntime.StopReasonCompleted, "")
 	if app.state.StatusText != statusReady {
 		t.Fatalf("expected completed with empty execution error to set ready status")
 	}
 
 	app.state.ExecutionError = "boom"
 	app.state.StatusText = ""
-	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonCompleted},
-	})
+	applyStopReason(&app, agentruntime.StopReasonCompleted, "")
 	if app.state.StatusText == statusReady {
 		t.Fatalf("expected completed branch to keep status unchanged when execution error exists")
 	}
 
-	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonUserInterrupt},
-	})
+	applyStopReason(&app, agentruntime.StopReasonUserInterrupt, "")
 	if app.state.ExecutionError != "" || app.state.StatusText != statusCanceled {
 		t.Fatalf("expected canceled state to clear error and set canceled status")
 	}
 
-	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonBudgetExceeded},
-	})
+	applyStopReason(&app, agentruntime.StopReasonBudgetExceeded, "")
 	if app.state.ExecutionError != "" || app.state.StatusText != "Context budget exceeded" {
 		t.Fatalf("expected budget stop without execution error, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
 	}
-	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{
-			Reason: agentruntime.StopReasonMaxTurnsReached,
-			Detail: "runtime: max turn limit reached (40)",
-		},
-	})
+	applyStopReason(&app, agentruntime.StopReasonMaxTurnsReached, "runtime: max turn limit reached (40)")
 	if app.state.ExecutionError != "" || app.state.StatusText != "runtime: max turn limit reached (40)" {
 		t.Fatalf("expected max turns stop without execution error, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
 	}
+	applyStopReason(&app, agentruntime.StopReasonCompatibilityFallback, "")
+	if app.state.ExecutionError != "" || app.state.StatusText != "Task is incomplete" {
+		t.Fatalf("expected compatibility fallback treated as incomplete, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
+	}
 
-	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonFatalError, Detail: "  "},
-	})
+	applyStopReason(&app, agentruntime.StopReasonFatalError, "  ")
 	if app.state.StatusText != "runtime stopped" || app.state.ExecutionError != "runtime stopped" {
 		t.Fatalf("expected fatal stop default detail, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
 	}
 
-	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonFatalError, Detail: "explicit failure"},
-	})
+	applyStopReason(&app, agentruntime.StopReasonFatalError, "explicit failure")
 	if app.state.StatusText != "explicit failure" || app.state.ExecutionError != "explicit failure" {
 		t.Fatalf("expected explicit fatal stop detail to be surfaced")
 	}
 
-	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
-		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("STOP_UNKNOWN")},
-	})
+	applyStopReason(&app, agentruntime.StopReason("STOP_UNKNOWN"), "")
 	if !strings.Contains(app.state.ExecutionError, "unknown stop reason") {
 		t.Fatalf("expected unknown stop reason error, got %q", app.state.ExecutionError)
 	}
@@ -266,6 +251,15 @@ func TestRuntimeEventMultimodalHandlers(t *testing.T) {
 	if handled := runtimeEventAssetSaveFailedHandler(&app, agentruntime.RuntimeEvent{Payload: true}); handled {
 		t.Fatalf("expected invalid asset_save_failed payload to return false")
 	}
+}
+
+func applyStopReason(app *App, reason agentruntime.StopReason, detail string) {
+	runtimeEventStopReasonDecidedHandler(app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.StopReasonDecidedPayload{
+			Reason: reason,
+			Detail: detail,
+		},
+	})
 }
 
 func TestHandleRuntimeEventRoutesByRegistryWithoutBindingTransientSession(t *testing.T) {

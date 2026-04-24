@@ -1480,13 +1480,8 @@ func runtimeEventPhaseChangedHandler(a *App, event tuiservices.RuntimeEvent) boo
 	if !ok {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(payload.To)) {
-	case "plan":
-		a.setRunProgress(0.3, "Planning")
-	case "execute":
-		a.setRunProgress(0.6, "Running tools")
-	case "verify":
-		a.setRunProgress(0.82, "Verifying")
+	if progress, ok := runtimePhaseProgress(payload.To); ok {
+		a.setRunProgress(progress.value, progress.label)
 	}
 	return false
 }
@@ -1504,19 +1499,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 	a.pendingPermission = nil
 	a.clearRunProgress()
 
-	reason := strings.ToLower(strings.TrimSpace(string(payload.Reason)))
-	switch reason {
-	case "stop_completed":
-		reason = strings.ToLower(string(tuiservices.StopReasonAccepted))
-	case "stop_user_interrupt":
-		reason = strings.ToLower(string(tuiservices.StopReasonUserInterrupt))
-	case "stop_fatal_error":
-		reason = strings.ToLower(string(tuiservices.StopReasonFatalError))
-	case "stop_max_turns_reached":
-		reason = strings.ToLower(string(tuiservices.StopReasonMaxTurnExceeded))
-	case "stop_budget_exceeded":
-		reason = strings.ToLower(string(tuiservices.StopReasonBudgetExceeded))
-	}
+	reason := normalizeRuntimeStopReason(payload.Reason)
 	switch reason {
 	case strings.ToLower(string(tuiservices.StopReasonCompleted)):
 		if strings.TrimSpace(a.state.ExecutionError) == "" {
@@ -1526,11 +1509,9 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		strings.ToLower(string(tuiservices.StopReasonTodoWaitingExternal)),
 		strings.ToLower(string(tuiservices.StopReasonNoProgressAfterFinalIntercept)),
 		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithUnconvergedTodos)),
-		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithFailedVerification)):
-		detail := strings.TrimSpace(payload.Detail)
-		if detail == "" {
-			detail = "Task is incomplete"
-		}
+		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithFailedVerification)),
+		strings.ToLower(string(tuiservices.StopReasonCompatibilityFallback)):
+		detail := runtimeStopDetail(payload.Detail, "Task is incomplete")
 		a.state.ExecutionError = ""
 		a.state.StatusText = detail
 		a.appendActivity("run", "Run incomplete", detail, false)
@@ -1542,34 +1523,22 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionDenied)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionError)):
-		detail := strings.TrimSpace(payload.Detail)
-		if detail == "" {
-			detail = "Verification failed"
-		}
+		detail := runtimeStopDetail(payload.Detail, "Verification failed")
 		a.state.ExecutionError = detail
 		a.state.StatusText = detail
 		a.appendActivity("run", "Verification failed", detail, true)
 	case strings.ToLower(string(tuiservices.StopReasonBudgetExceeded)):
-		detail := strings.TrimSpace(payload.Detail)
-		if detail == "" {
-			detail = "Context budget exceeded"
-		}
+		detail := runtimeStopDetail(payload.Detail, "Context budget exceeded")
 		a.state.ExecutionError = ""
 		a.state.StatusText = detail
 		a.appendActivity("run", "Context budget exceeded", detail, false)
 	case strings.ToLower(string(tuiservices.StopReasonMaxTurnsReached)):
-		detail := strings.TrimSpace(payload.Detail)
-		if detail == "" {
-			detail = "Max turns reached"
-		}
+		detail := runtimeStopDetail(payload.Detail, "Max turns reached")
 		a.state.ExecutionError = ""
 		a.state.StatusText = detail
 		a.appendActivity("run", "Max turn limit reached", detail, false)
 	case strings.ToLower(string(tuiservices.StopReasonFatalError)):
-		detail := strings.TrimSpace(payload.Detail)
-		if detail == "" {
-			detail = "runtime stopped"
-		}
+		detail := runtimeStopDetail(payload.Detail, "runtime stopped")
 		a.state.ExecutionError = detail
 		a.state.StatusText = detail
 		a.appendActivity("run", "Runtime stopped", detail, true)
@@ -1580,6 +1549,48 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		a.appendActivity("run", "Runtime stopped", detail, true)
 	}
 	return false
+}
+
+type runtimeProgressState struct {
+	value float64
+	label string
+}
+
+var runtimePhaseProgressMap = map[string]runtimeProgressState{
+	"plan":    {value: 0.3, label: "Planning"},
+	"execute": {value: 0.6, label: "Running tools"},
+	"verify":  {value: 0.82, label: "Verifying"},
+}
+
+var runtimeStopReasonAliases = map[string]string{
+	"stop_completed":         strings.ToLower(string(tuiservices.StopReasonAccepted)),
+	"stop_user_interrupt":    strings.ToLower(string(tuiservices.StopReasonUserInterrupt)),
+	"stop_fatal_error":       strings.ToLower(string(tuiservices.StopReasonFatalError)),
+	"stop_max_turns_reached": strings.ToLower(string(tuiservices.StopReasonMaxTurnExceeded)),
+	"stop_budget_exceeded":   strings.ToLower(string(tuiservices.StopReasonBudgetExceeded)),
+}
+
+// runtimePhaseProgress 返回 phase 对应的进度展示状态。
+func runtimePhaseProgress(phase string) (runtimeProgressState, bool) {
+	progress, ok := runtimePhaseProgressMap[strings.ToLower(strings.TrimSpace(phase))]
+	return progress, ok
+}
+
+// normalizeRuntimeStopReason 兼容旧版 stop reason 并统一格式。
+func normalizeRuntimeStopReason(reason tuiservices.StopReason) string {
+	normalized := strings.ToLower(strings.TrimSpace(string(reason)))
+	if alias, ok := runtimeStopReasonAliases[normalized]; ok {
+		return alias
+	}
+	return normalized
+}
+
+// runtimeStopDetail 统一处理 stop reason 的默认详情文案。
+func runtimeStopDetail(detail, fallback string) string {
+	if trimmed := strings.TrimSpace(detail); trimmed != "" {
+		return trimmed
+	}
+	return fallback
 }
 
 func runtimeEventTodoUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
