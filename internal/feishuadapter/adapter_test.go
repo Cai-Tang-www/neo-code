@@ -866,6 +866,61 @@ func TestShouldEmitProgressThrottlesRapidDuplicates(t *testing.T) {
 	}
 }
 
+func TestTryHandleTextPermissionCoversApproveRejectAndFailures(t *testing.T) {
+	adapter := newTestAdapter(t)
+	gateway := adapterTestGateway(adapter)
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-approve", "允许 perm-allow")
+	if !handled || err != nil {
+		t.Fatalf("approve handled=%v err=%v", handled, err)
+	}
+	handled, err = adapter.tryHandleTextPermission(context.Background(), "chat-reject", "拒绝 perm-reject")
+	if !handled || err != nil {
+		t.Fatalf("reject handled=%v err=%v", handled, err)
+	}
+	handled, err = adapter.tryHandleTextPermission(context.Background(), "chat-empty", "   ")
+	if handled || err != nil {
+		t.Fatalf("blank message handled=%v err=%v", handled, err)
+	}
+	handled, err = adapter.tryHandleTextPermission(context.Background(), "chat-normal", "普通消息")
+	if handled || err != nil {
+		t.Fatalf("plain message handled=%v err=%v", handled, err)
+	}
+
+	gateway.mu.Lock()
+	gateway.resolveErr = assertErr("resolve failed")
+	gateway.mu.Unlock()
+	handled, err = adapter.tryHandleTextPermission(context.Background(), "chat-fail", "允许 perm-fail")
+	if !handled || err == nil {
+		t.Fatalf("failure handled=%v err=%v", handled, err)
+	}
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 {
+		t.Fatal("expected approval feedback messages")
+	}
+	foundApprove := false
+	foundReject := false
+	foundFailure := false
+	for _, message := range msgs {
+		if message.kind != "text" {
+			continue
+		}
+		if strings.Contains(message.text, "审批已提交：允许一次") {
+			foundApprove = true
+		}
+		if strings.Contains(message.text, "审批已提交：拒绝") {
+			foundReject = true
+		}
+		if strings.Contains(message.text, "审批提交失败") {
+			foundFailure = true
+		}
+	}
+	if !foundApprove || !foundReject || !foundFailure {
+		t.Fatalf("unexpected permission feedback messages: %#v", msgs)
+	}
+}
+
 func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 	if text, err := decodeMessageText(""); err != nil || text != "" {
 		t.Fatalf("decode empty text = %q, %v", text, err)
@@ -903,6 +958,29 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 		"payload": map[string]any{"to": "plan"},
 	}, "thinking"); status != "planning" {
 		t.Fatalf("status = %q, want planning", status)
+	}
+	if status := deriveRunStatus("phase_changed", map[string]any{
+		"payload": map[string]any{"to": "execute"},
+	}, "thinking"); status != "running" {
+		t.Fatalf("status = %q, want running", status)
+	}
+	if status := deriveRunStatus("unknown", map[string]any{}, ""); status != "thinking" {
+		t.Fatalf("status = %q, want thinking fallback", status)
+	}
+	if summary := extractHookNotificationSummary(map[string]any{
+		"payload": map[string]any{"notification": "外部系统回调"},
+	}); summary != "外部系统回调" {
+		t.Fatalf("summary = %q, want notification fallback", summary)
+	}
+	if summary := extractHookNotificationSummary(map[string]any{
+		"payload": map[string]any{"message": "异步消息"},
+	}); summary != "异步消息" {
+		t.Fatalf("summary = %q, want message fallback", summary)
+	}
+	if hint := extractHookNotificationHint(map[string]any{
+		"payload": map[string]any{"status": "completed"},
+	}); hint != "completed" {
+		t.Fatalf("hint = %q, want status fallback", hint)
 	}
 	safeLogAdapter := &Adapter{}
 	safeLogAdapter.safeLog("ignored")

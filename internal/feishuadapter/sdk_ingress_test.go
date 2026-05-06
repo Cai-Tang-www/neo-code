@@ -115,6 +115,65 @@ func TestMapSDKMessageEventSupportsGroupMessage(t *testing.T) {
 	}
 }
 
+func TestMapSDKMessageEventRejectsInvalidPayloads(t *testing.T) {
+	testCases := []struct {
+		name  string
+		event *larkevent.EventReq
+	}{
+		{name: "nil event", event: nil},
+		{name: "empty body", event: &larkevent.EventReq{}},
+		{name: "invalid json", event: &larkevent.EventReq{Body: []byte(`{`)}},
+		{name: "wrong event type", event: &larkevent.EventReq{Body: []byte(`{"header":{"event_type":"other"}}`)}},
+		{name: "missing ids", event: &larkevent.EventReq{Body: []byte(`{"header":{"event_type":"im.message.receive_v1"},"event":{"message":{"chat_id":"chat"}}}`)}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, ok := mapSDKMessageEvent(testCase.event); ok {
+				t.Fatal("expected invalid sdk message event to be rejected")
+			}
+		})
+	}
+}
+
+func TestMapSDKMessageEventFallsBackToRawContentWhenDecodeFails(t *testing.T) {
+	body := []byte(`{
+		"header":{"event_id":"evt-raw","event_type":"im.message.receive_v1","app_id":"cli_app"},
+		"event":{"chat_type":"p2p","message":{"message_id":"msg-raw","chat_id":"chat-raw","content":"not-json"}}
+	}`)
+	event, ok := mapSDKMessageEvent(&larkevent.EventReq{Body: body})
+	if !ok {
+		t.Fatal("expected sdk event to parse with raw content fallback")
+	}
+	if event.ContentText != "not-json" || event.ChatType != "p2p" {
+		t.Fatalf("unexpected fallback event: %#v", event)
+	}
+}
+
+func TestMapSDKCardActionEventCoversSuccessAndFailure(t *testing.T) {
+	valid := []byte(`{
+		"header":{"event_id":"evt-card"},
+		"event":{"action":{"value":{"request_id":"perm-1","decision":"allow_once"}}}
+	}`)
+	card, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: valid})
+	if !ok {
+		t.Fatal("expected valid sdk card action")
+	}
+	if card.EventID != "evt-card" || card.RequestID != "perm-1" || card.Decision != "allow_once" {
+		t.Fatalf("unexpected card action: %#v", card)
+	}
+
+	for _, body := range [][]byte{
+		nil,
+		[]byte(`{`),
+		[]byte(`{"event":{"action":{"value":{"decision":"allow_once"}}}}`),
+		[]byte(`{"event":{"action":{"value":{"request_id":"perm-1","decision":"later"}}}}`),
+	} {
+		if _, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: body}); ok {
+			t.Fatalf("expected invalid body %q to be rejected", string(body))
+		}
+	}
+}
+
 func TestHandleMessageSDKPrivateChatTriggersRun(t *testing.T) {
 	adapter := newTestAdapter(t)
 	adapter.cfg.IngressMode = IngressModeSDK
