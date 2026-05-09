@@ -1662,6 +1662,103 @@ func TestAskUserHelperFunctionsCoverFallbackBranches(t *testing.T) {
 	}
 }
 
+func TestParseUserQuestionTextAnswerCoversChoiceBranches(t *testing.T) {
+	t.Parallel()
+
+	adapter := newTestAdapter(t)
+	adapter.pendingQuestions["single"] = userQuestionEntry{
+		RequestID: "single",
+		Kind:      "single_choice",
+		Options: []UserQuestionCardOption{
+			{Label: "Alpha"},
+			{Label: "Beta"},
+		},
+	}
+	adapter.pendingQuestions["multi"] = userQuestionEntry{
+		RequestID:  "multi",
+		Kind:       "multi_choice",
+		MaxChoices: 2,
+		Options: []UserQuestionCardOption{
+			{Label: "North"},
+			{Label: "South"},
+			{Label: "West"},
+		},
+	}
+
+	values, message, ok := adapter.parseUserQuestionTextAnswer("missing", " free text ")
+	if !ok || message != "free text" || len(values) != 1 || values[0] != "free text" {
+		t.Fatalf("missing pending question fallback = values:%#v message:%q ok:%v", values, message, ok)
+	}
+
+	values, message, ok = adapter.parseUserQuestionTextAnswer("single", " 2 ")
+	if !ok || message != "" || len(values) != 1 || values[0] != "Beta" {
+		t.Fatalf("single choice by index = values:%#v message:%q ok:%v", values, message, ok)
+	}
+
+	values, message, ok = adapter.parseUserQuestionTextAnswer("multi", "north，South|North")
+	if !ok || message != "" || len(values) != 2 || values[0] != "North" || values[1] != "South" {
+		t.Fatalf("multi choice normalized values = %#v message=%q ok=%v", values, message, ok)
+	}
+
+	if _, _, ok := adapter.parseUserQuestionTextAnswer("single", " "); ok {
+		t.Fatal("blank single choice answer should be rejected")
+	}
+	if _, _, ok := adapter.parseUserQuestionTextAnswer("multi", "North,West,South"); ok {
+		t.Fatal("multi choice answer exceeding max choices should be rejected")
+	}
+	if _, _, ok := adapter.parseUserQuestionTextAnswer("multi", "North,Unknown"); ok {
+		t.Fatal("multi choice answer with unknown option should be rejected")
+	}
+}
+
+func TestResolveChoiceLabelAndExtractUserQuestionRequest(t *testing.T) {
+	t.Parallel()
+
+	options := []UserQuestionCardOption{
+		{Label: "Alpha"},
+		{Label: "Beta"},
+	}
+	if label, ok := resolveChoiceLabel(" beta ", options); !ok || label != "Beta" {
+		t.Fatalf("resolveChoiceLabel by label = %q ok=%v, want Beta true", label, ok)
+	}
+	if _, ok := resolveChoiceLabel("3", options); ok {
+		t.Fatal("out-of-range option index should be rejected")
+	}
+	if _, ok := resolveChoiceLabel(" ", options); ok {
+		t.Fatal("blank option token should be rejected")
+	}
+
+	entry := extractUserQuestionRequest(map[string]any{
+		"payload": map[string]any{
+			"request_id":  " ask-1 ",
+			"question_id": " q-1 ",
+			"title":       " Pick env ",
+			"description": " choose target ",
+			"kind":        " SINGLE_CHOICE ",
+			"allow_skip":  true,
+			"max_choices": json.Number("2"),
+			"options": []any{
+				" Alpha ",
+				map[string]any{"label": " Beta ", "description": " second "},
+				map[string]any{"description": "missing label"},
+				"",
+			},
+		},
+	})
+	if entry.RequestID != "ask-1" || entry.QuestionID != "q-1" || entry.Kind != "single_choice" {
+		t.Fatalf("entry basic fields = %#v, want trimmed values", entry)
+	}
+	if !entry.AllowSkip || entry.MaxChoices != 2 {
+		t.Fatalf("entry flags = %#v, want allow_skip true and max_choices 2", entry)
+	}
+	if len(entry.Options) != 2 || entry.Options[0].Label != "Alpha" || entry.Options[1].Description != "second" {
+		t.Fatalf("entry options = %#v, want filtered and trimmed options", entry.Options)
+	}
+	if fallback := extractUserQuestionRequest(nil); fallback.RequestID != "" || len(fallback.Options) != 0 {
+		t.Fatalf("nil payload fallback = %#v", fallback)
+	}
+}
+
 func TestIsMentionCurrentBotMatchesConfiguredBotIDs(t *testing.T) {
 	cfg := Config{AppID: "cli_app", BotUserID: "ou_bot", BotOpenID: "ou_open_bot"}
 	event := FeishuMessageEvent{
