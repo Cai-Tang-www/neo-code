@@ -28,6 +28,9 @@ func TestParseUserQuestionPayloads(t *testing.T) {
 	if got, ok := parseUserQuestionResolvedPayload(&resolved); !ok || got.RequestID != "ask-1" {
 		t.Fatalf("parse resolved pointer payload failed: %+v ok=%v", got, ok)
 	}
+	if _, ok := parseUserQuestionResolvedPayload((*agentruntime.UserQuestionResolvedPayload)(nil)); ok {
+		t.Fatalf("nil pointer resolved payload should be rejected")
+	}
 	if _, ok := parseUserQuestionResolvedPayload("bad"); ok {
 		t.Fatalf("string payload should be rejected")
 	}
@@ -203,6 +206,43 @@ func TestFormatUserQuestionPromptLines(t *testing.T) {
 	}
 	if !containsLine(lines, "Submitting user question answer...") {
 		t.Fatalf("expected submitting hint in lines: %q", joined)
+	}
+}
+
+func TestFormatUserQuestionOptionDisplay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		option any
+		want   string
+	}{
+		{
+			name:   "trim string",
+			option: " alpha ",
+			want:   "alpha",
+		},
+		{
+			name:   "map with description",
+			option: map[string]any{"label": "beta", "description": "second"},
+			want:   "beta - second",
+		},
+		{
+			name:   "map with label only",
+			option: map[string]any{"label": "gamma"},
+			want:   "gamma",
+		},
+		{
+			name:   "fallback fmt string",
+			option: 42,
+			want:   "42",
+		},
+	}
+
+	for _, tc := range tests {
+		if got := formatUserQuestionOptionDisplay(tc.option); got != tc.want {
+			t.Fatalf("%s: formatUserQuestionOptionDisplay(%v) = %q, want %q", tc.name, tc.option, got, tc.want)
+		}
 	}
 }
 

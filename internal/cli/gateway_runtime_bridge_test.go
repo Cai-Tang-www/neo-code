@@ -1057,6 +1057,122 @@ func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
 	}
 }
 
+func TestConvertRuntimePendingUserQuestionClonesSnapshot(t *testing.T) {
+	t.Parallel()
+
+	converted := convertRuntimePendingUserQuestion(&agentruntime.UserQuestionRequestedPayload{
+		RequestID:   " ask-1 ",
+		QuestionID:  " q-1 ",
+		Title:       " title ",
+		Description: " desc ",
+		Kind:        " single_choice ",
+		Options:     []any{"A", map[string]any{"label": "B"}},
+		Required:    true,
+		AllowSkip:   true,
+		MaxChoices:  2,
+		TimeoutSec:  300,
+	})
+	if converted == nil {
+		t.Fatal("converted snapshot should not be nil")
+	}
+	if converted.RequestID != "ask-1" || converted.QuestionID != "q-1" || converted.Kind != "single_choice" {
+		t.Fatalf("converted snapshot = %#v, want trimmed fields", converted)
+	}
+	if len(converted.Options) != 2 {
+		t.Fatalf("converted options len = %d, want 2", len(converted.Options))
+	}
+
+	converted.Options[0] = "mutated"
+	convertedNil := convertRuntimePendingUserQuestion(nil)
+	if convertedNil != nil {
+		t.Fatalf("nil payload should stay nil, got %#v", convertedNil)
+	}
+}
+
+func TestReadUsagePayloadNormalizesFallbacks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		container map[string]any
+		wantIn    int
+		wantOut   int
+	}{
+		{
+			name:      "empty container",
+			container: nil,
+			wantIn:    0,
+			wantOut:   0,
+		},
+		{
+			name:      "missing usage",
+			container: map[string]any{"other": 1},
+			wantIn:    0,
+			wantOut:   0,
+		},
+		{
+			name: "map payload",
+			container: map[string]any{
+				"usage": map[string]any{"input_tokens": "12", "output_tokens": 4.9},
+			},
+			wantIn:  12,
+			wantOut: 4,
+		},
+		{
+			name: "struct-like payload via marshal",
+			container: map[string]any{
+				"usage": map[string]int{"input_tokens": -1, "output_tokens": 7},
+			},
+			wantIn:  0,
+			wantOut: 7,
+		},
+		{
+			name: "invalid payload",
+			container: map[string]any{
+				"usage": make(chan int),
+			},
+			wantIn:  0,
+			wantOut: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := readUsagePayload(tc.container)
+			if got["input_tokens"] != tc.wantIn || got["output_tokens"] != tc.wantOut {
+				t.Fatalf("readUsagePayload(%q) = %#v, want input=%d output=%d", tc.name, got, tc.wantIn, tc.wantOut)
+			}
+		})
+	}
+}
+
+func TestNormalizeTokenValue(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value any
+		want  int
+	}{
+		{name: "positive int", value: 3, want: 3},
+		{name: "positive int64", value: int64(5), want: 5},
+		{name: "positive float", value: 8.8, want: 8},
+		{name: "string", value: " 11 ", want: 11},
+		{name: "zero", value: 0, want: 0},
+		{name: "negative", value: -2, want: 0},
+		{name: "blank string", value: " ", want: 0},
+		{name: "invalid string", value: "oops", want: 0},
+		{name: "unsupported", value: true, want: 0},
+	}
+
+	for _, tc := range tests {
+		if got := normalizeTokenValue(tc.value); got != tc.want {
+			t.Fatalf("%s: normalizeTokenValue(%v) = %d, want %d", tc.name, tc.value, got, tc.want)
+		}
+	}
+}
+
 func TestIsRuntimeNotFoundErrorIncludesOSErrNotExist(t *testing.T) {
 	t.Parallel()
 
